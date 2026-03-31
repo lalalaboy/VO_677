@@ -1,0 +1,21 @@
+source /home/junze/anaconda3/bin/activate vo_gs_baseline
+cd /home/junze/VOLDOR_GS_baseline/demo
+
+# Keep runtime libs deterministic (avoid picking stale CUDA/conda libs from other projects).
+export LD_LIBRARY_PATH="/home/junze/anaconda3/envs/vo_baseline/lib:/usr/local/cuda/lib64:/usr/local/cuda-12.2/targets/x86_64-linux/lib"
+
+#  --disp_dir "/home/junze/VO/data/gt/disp_gt" \
+python demo.py \
+  --disp_dir "/home/junze/VO/data/gt/disp_gt" \
+  --flow_dir "/home/junze/VOLDOR_GS/data/input/optical_flow" \
+  --img_dir "/home/junze/VOLDOR_GS/data/input/img" \
+  --fx 586.27075 \
+  --fy 586.27075 \
+  --cx 374.04108 \
+  --cy 202.26265 \
+  --bf 117.254150390625 \
+  --mode stereo \
+  --enable_mapping \
+  --enable_loop_closure "/home/junze/VOLDOR_GS_baseline/demo/ORBvoc.bin" \
+  --save_poses "/home/junze/VOLDOR_GS_baseline/data/result/poses/poses_KITTI.txt" \
+  --save_depths "/home/junze/VOLDOR_GS_baseline/data/result/depths"
