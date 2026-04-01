@@ -4,5 +4,5 @@ scipy
 matplotlib
 PyOpenGL
 PyOpenGL-accelerate
-sklearn
+scikit-learn
 opencv-python
