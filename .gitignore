@@ -1,1 +1,7 @@
 gsvoldor.tar
+slam_py/install/build
+slam_py/install/frame-alignment
+slam_py/install/pose-graph
+slam_py/install/voldor
+**/libgpu-kernels.so
+**/pyvoldor_vo*.so
