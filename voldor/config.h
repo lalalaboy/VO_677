@@ -43,6 +43,7 @@ struct Config {
 	int cpu_p3p = false; //do p3p on cpu
 	int lambdatwist = true; //use lambdatwist instead of ap3p
 	int n_poses_to_sample = 8192;
+	int pose_fast_mode = 1; // 0: baseline path, 1: safe reuse optimization, 2: aggressive sampling optimization
 	float pose_sample_min_depth = 0.1f;
 	float pose_sample_max_depth = 1000.0f;
 	int max_trace_on_flow = 3; //maximum times of tracking only with optical flow
@@ -183,6 +184,8 @@ struct Config {
 				str_to_arg(safe_arr_access(cfg_strs, ++i), this->max_trace_on_flow);
 			else if (cfg_strs[i] == "--n_poses_to_sample")
 				str_to_arg(safe_arr_access(cfg_strs, ++i), this->n_poses_to_sample);
+			else if (cfg_strs[i] == "--pose_fast_mode")
+				str_to_arg(safe_arr_access(cfg_strs, ++i), this->pose_fast_mode);
 			else if (cfg_strs[i] == "--pose_sample_min_depth")
 				str_to_arg(safe_arr_access(cfg_strs, ++i), this->pose_sample_min_depth);
 			else if (cfg_strs[i] == "--pose_sample_max_depth")
@@ -287,6 +290,7 @@ struct Config {
 		cout << "lambdatwist = " << lambdatwist << endl;
 		cout << "max_trace_on_flow = " << max_trace_on_flow << endl;
 		cout << "n_poses_to_sample = " << n_poses_to_sample << endl;
+		cout << "pose_fast_mode = " << pose_fast_mode << endl;
 		cout << "pose_sample_min_depth = " << pose_sample_min_depth << endl;
 		cout << "pose_sample_max_depth = " << pose_sample_max_depth << endl;
 		cout << "rigidness_threshold = " << rigidness_threshold << endl;

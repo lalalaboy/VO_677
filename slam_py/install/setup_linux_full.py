@@ -28,6 +28,12 @@ opencv_libs = [flag[2:] for flag in opencv_link_flags if flag.startswith('-l')]
 opencv_lib_dirs = [flag[2:] for flag in opencv_link_flags if flag.startswith('-L')]
 opencv_include_dirs = [flag[2:] for flag in opencv_cflags if flag.startswith('-I')]
 opencv_nvcc_include_flags = ' '.join(f'-I{inc}' for inc in opencv_include_dirs)
+
+conda_prefix = os.environ.get('CONDA_PREFIX', '')
+conda_lib_dir = os.path.join(conda_prefix, 'lib') if conda_prefix else ''
+conda_lib_dirs = [conda_lib_dir] if conda_lib_dir and os.path.isdir(conda_lib_dir) else []
+conda_glog_lib = os.path.join(conda_lib_dir, 'libglog.so.2') if conda_lib_dirs else ''
+
 ceres_lib_dirs = ['/home/junze/ceres-solver/build_vo_baseline/lib']
 ceres_include_dirs = [
     '/home/junze/ceres-solver/include',
@@ -49,13 +55,18 @@ ext = Extension('pyvoldor_full',
             [x for x in glob('../../frame-alignment/*.cpp') if 'main.cpp' not in x] + \
             [x for x in glob('../../pose-graph/*.cpp') if 'main.cpp' not in x],
     language = 'c++',
-    library_dirs = ['.'] + ceres_lib_dirs + ['/usr/local/lib', '/usr/local/cuda/lib64'] + opencv_lib_dirs,
-    libraries = ['gpu-kernels', 'cudart', 'ceres', 'glog', \
+    library_dirs = ['.', '/usr/lib/x86_64-linux-gnu'] + opencv_lib_dirs + ceres_lib_dirs + ['/usr/local/lib', '/usr/local/cuda/lib64'],
+    libraries = ['gpu-kernels', 'cudart', 'ceres', \
             'amd','btf','camd','ccolamd','cholmod','colamd','cxsparse',\
             'graphblas','klu','ldl','rbio','spqr','umfpack', 'lapack', 'blas', 'gcc'] + opencv_libs,
-    include_dirs = [numpy.get_include(), '/usr/include/eigen3'] + opencv_include_dirs + ceres_include_dirs,
-    runtime_library_dirs = ceres_lib_dirs + ['/usr/local/cuda/lib64'],
-    extra_link_args = [f'-Wl,-rpath,{ceres_lib_dirs[0]}']
+    include_dirs = [os.path.abspath('.'), numpy.get_include(), '/usr/include/eigen3'] + opencv_include_dirs + ceres_include_dirs,
+    extra_compile_args = ['-include', 'glog_ceres_compat.h'],
+    runtime_library_dirs = conda_lib_dirs + ceres_lib_dirs + ['/usr/local/cuda/lib64'],
+    extra_link_args = (
+        ([conda_glog_lib] if conda_glog_lib else []) +
+        ([f'-Wl,-rpath,{conda_lib_dir}'] if conda_lib_dirs else []) +
+        [f'-Wl,-rpath,{ceres_lib_dirs[0]}']
+    )
 )
 
 setup(

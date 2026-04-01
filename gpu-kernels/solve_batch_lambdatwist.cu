@@ -6,6 +6,13 @@
 #define N_THREADS 32
 
 __constant__ static float _fx, _fy, _cx, _cy;
+static float* d_p2s_cache = NULL;
+static float* d_p3s_cache = NULL;
+static float* d_rvecs_cache = NULL;
+static float* d_tvecs_cache = NULL;
+static curandState* d_rand_states_cache = NULL;
+static int pts_cap = 0;
+static int poses_cap = 0;
 
 
 __global__ static void solve(float* d_p2s, float* d_p3s, float* d_rvecs, float* d_tvecs, curandState* d_rand_states, int N_pts, int N_poses) {
@@ -59,43 +66,35 @@ int solve_batch_p3p_lambdatwist_gpu(float* h_p3s, float* h_p2s, float* h_o_rvecs
 		CUDA_UPDATE_SYMBOL_IF_CHANGED(h_K[5], cache_symbols[3], _cy);
 	}
 
-	// allocate and copy pts2+pts3
-	float* d_p2s;
-	float* d_p3s;
-	cudaMalloc((void**)&d_p2s, N_pts * 2 * sizeof(float));
-	cudaMalloc((void**)&d_p3s, N_pts * 3 * sizeof(float));
-	cudaMemcpy(d_p2s, h_p2s, N_pts * 2 * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_p3s, h_p3s, N_pts * 3 * sizeof(float), cudaMemcpyHostToDevice);
+	// persistent device buffers to avoid repeated malloc/free in hot path
+	if (N_pts > pts_cap) {
+		if (d_p2s_cache) cudaFree(d_p2s_cache);
+		if (d_p3s_cache) cudaFree(d_p3s_cache);
+		cudaMalloc((void**)&d_p2s_cache, N_pts * 2 * sizeof(float));
+		cudaMalloc((void**)&d_p3s_cache, N_pts * 3 * sizeof(float));
+		pts_cap = N_pts;
+	}
+	if (N_poses > poses_cap) {
+		if (d_rvecs_cache) cudaFree(d_rvecs_cache);
+		if (d_tvecs_cache) cudaFree(d_tvecs_cache);
+		if (d_rand_states_cache) cudaFree(d_rand_states_cache);
+		cudaMalloc((void**)&d_rvecs_cache, N_poses * 3 * sizeof(float));
+		cudaMalloc((void**)&d_tvecs_cache, N_poses * 3 * sizeof(float));
+		cudaMalloc((void**)&d_rand_states_cache, N_poses * sizeof(curandState));
+		init_rand_states << <DIV_CEIL(N_poses, N_THREADS), N_THREADS >> > (d_rand_states_cache, N_poses);
+		poses_cap = N_poses;
+	}
+	cudaMemcpy(d_p2s_cache, h_p2s, N_pts * 2 * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_p3s_cache, h_p3s, N_pts * 3 * sizeof(float), cudaMemcpyHostToDevice);
 	gpuErrchk;
-
-	// allocate device memory for R,t
-	float* d_rvecs;
-	float* d_tvecs;
-	cudaMalloc((void**)&d_rvecs, N_poses * 3 * sizeof(float));
-	cudaMalloc((void**)&d_tvecs, N_poses * 3 * sizeof(float));
-	gpuErrchk;
-
-	// init rand seeds
-	curandState* d_rand_states;
-	cudaMalloc((void**)&d_rand_states, N_poses * sizeof(curandState));
-	init_rand_states << <DIV_CEIL(N_poses, N_THREADS), N_THREADS >> > (d_rand_states, N_poses);
 
 	// solve batch ap3p
-	float fx = h_K[0], cx = h_K[2], fy = h_K[4], cy = h_K[5];
-	solve << <DIV_CEIL(N_poses, N_THREADS), N_THREADS >> > (d_p2s, d_p3s, d_rvecs, d_tvecs, d_rand_states, N_pts, N_poses);
+	solve << <DIV_CEIL(N_poses, N_THREADS), N_THREADS >> > (d_p2s_cache, d_p3s_cache, d_rvecs_cache, d_tvecs_cache, d_rand_states_cache, N_pts, N_poses);
 	gpuErrchk;
 
 	// copy back R,t
-	cudaMemcpy(h_o_rvecs, d_rvecs, N_poses * 3 * sizeof(float), cudaMemcpyDeviceToHost);
-	cudaMemcpy(h_o_tvecs, d_tvecs, N_poses * 3 * sizeof(float), cudaMemcpyDeviceToHost);
-	gpuErrchk;
-
-	// free all
-	cudaFree(d_rvecs);
-	cudaFree(d_tvecs);
-	cudaFree(d_p2s);
-	cudaFree(d_p3s);
-	cudaFree(d_rand_states);
+	cudaMemcpy(h_o_rvecs, d_rvecs_cache, N_poses * 3 * sizeof(float), cudaMemcpyDeviceToHost);
+	cudaMemcpy(h_o_tvecs, d_tvecs_cache, N_poses * 3 * sizeof(float), cudaMemcpyDeviceToHost);
 	gpuErrchk;
 
 	return cudaSuccess;

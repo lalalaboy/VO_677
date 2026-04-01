@@ -25,6 +25,7 @@ os.environ['LD_LIBRARY_PATH'] = final_ld_path
 os.environ['LD_PRELOAD'] = '/usr/lib/x86_64-linux-gnu/libtiff.so.5' + (':' + os.environ.get('LD_PRELOAD', '') if os.environ.get('LD_PRELOAD') else '')
 
 import argparse
+import time
 parser = argparse.ArgumentParser(description='VOLDOR-SLAM demo script')
 parser.add_argument('--mode', type=str, required=True, help='One from stereo/mono-scaled/mono. For stereo and mono-scaled, disparity input will be required.')
 parser.add_argument('--flow_dir', type=str, required=True)
@@ -37,8 +38,20 @@ parser.add_argument('--cy', type=float, required=True)
 parser.add_argument('--bf', type=float, default=0, help='Baseline x focal, which determines the world scale. If set to 0, default baseline is 0.')
 parser.add_argument('--resize', type=float, default=0.5, help='resize input size')
 parser.add_argument('--abs_resize', type=float, help='Resize factor related to the size that optical flow is estimated from. (useful to residual model)')
+parser.add_argument(
+    '--voldor_extra_config',
+    type=str,
+    default='',
+    help='Extra VOLDOR config string, e.g. "--n_poses_to_sample 4096 --rg_max_iters 60"',
+)
+parser.add_argument(
+    '--voldor_verbose',
+    action='store_true',
+    help='Disable --silent in VOLDOR config to print internal pose/depth timing logs.',
+)
 parser.add_argument('--enable_loop_closure', type=str, default=None)
 parser.add_argument('--enable_mapping', action='store_true')
+parser.add_argument('--no_viewer', action='store_true', help='Disable viewer thread for headless/benchmark runs.')
 parser.add_argument('--save_poses', type=str)
 parser.add_argument('--save_depths', type=str)
 
@@ -55,13 +68,16 @@ from voldor_slam import VOLDOR_SLAM
 
 if __name__ == '__main__':
     print(opt)
+    demo_t0 = time.perf_counter()
 
     # init slam instance and select mode from mono/mono-scaled/stereo
     slam = VOLDOR_SLAM(mode=opt.mode)
+    if opt.voldor_verbose:
+        slam.voldor_config = ' '.join(tok for tok in slam.voldor_config.split() if tok != '--silent') + ' '
 
     # set camera intrinsic
     slam.set_cam_params(opt.fx,opt.fy,opt.cx,opt.cy,opt.bf, rescale=opt.resize)
-    slam.voldor_user_config = f'--abs_resize_factor {opt.abs_resize}'
+    slam.voldor_user_config = f'--abs_resize_factor {opt.abs_resize} {opt.voldor_extra_config}'.strip()
 
     # enable loop closure
     if opt.enable_loop_closure is not None:
@@ -85,9 +101,11 @@ if __name__ == '__main__':
         slam.disp_loader_sync(0, block_when_uninit=True)
     
     # start viewer
-    viewer = VOLDOR_Viewer(slam)
-    viewer_thread = threading.Thread(target=viewer.start)
-    viewer_thread.start()
+    viewer_thread = None
+    if not opt.no_viewer:
+        viewer = VOLDOR_Viewer(slam)
+        viewer_thread = threading.Thread(target=viewer.start)
+        viewer_thread.start()
     
     # start VO and mapping threads
     vo_thread = threading.Thread(target=slam.vo_thread)
@@ -100,9 +118,16 @@ if __name__ == '__main__':
     vo_thread.join()
     if opt.enable_mapping:
         mapping_thread.join()
+    if viewer_thread is not None:
+        viewer_thread.join(timeout=1.0)
 
     # save poses and depths
     if opt.save_poses is not None:
         slam.save_poses(opt.save_poses, format='KITTI')
     if opt.save_depths is not None:
         slam.save_depth_maps(opt.save_depths)
+
+    total_s = time.perf_counter() - demo_t0
+    processed_frames = max(int(slam.fid_cur), 1)
+    print(f'demo total runtime = {total_s:.3f} s')
+    print(f'demo throughput = {processed_frames / total_s:.3f} frames/s')

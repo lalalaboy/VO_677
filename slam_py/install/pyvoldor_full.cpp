@@ -4,19 +4,26 @@
 {
     "distutils": {
         "depends": [
-            "../../frame-alignment/py_export.h",
-            "../../pose-graph/py_export.h",
-            "../../voldor/py_export.h",
             "/home/junze/.local/lib/python3.10/site-packages/numpy/core/include/numpy/arrayobject.h",
             "/home/junze/.local/lib/python3.10/site-packages/numpy/core/include/numpy/arrayscalars.h",
             "/home/junze/.local/lib/python3.10/site-packages/numpy/core/include/numpy/ndarrayobject.h",
             "/home/junze/.local/lib/python3.10/site-packages/numpy/core/include/numpy/ndarraytypes.h",
-            "/home/junze/.local/lib/python3.10/site-packages/numpy/core/include/numpy/ufuncobject.h"
+            "/home/junze/.local/lib/python3.10/site-packages/numpy/core/include/numpy/ufuncobject.h",
+            "/home/junze/VO_677/frame-alignment/py_export.h",
+            "/home/junze/VO_677/pose-graph/py_export.h",
+            "/home/junze/VO_677/voldor/py_export.h"
+        ],
+        "extra_compile_args": [
+            "-include",
+            "glog_ceres_compat.h"
         ],
         "extra_link_args": [
+            "/home/junze/anaconda3/envs/677/lib/libglog.so.2",
+            "-Wl,-rpath,/home/junze/anaconda3/envs/677/lib",
             "-Wl,-rpath,/home/junze/ceres-solver/build_vo_baseline/lib"
         ],
         "include_dirs": [
+            "/home/junze/VO_677/slam_py/install",
             "/home/junze/.local/lib/python3.10/site-packages/numpy/core/include",
             "/usr/include/eigen3",
             "/usr/include/opencv4",
@@ -28,7 +35,6 @@
             "gpu-kernels",
             "cudart",
             "ceres",
-            "glog",
             "amd",
             "btf",
             "camd",
@@ -102,12 +108,14 @@
         ],
         "library_dirs": [
             ".",
+            "/usr/lib/x86_64-linux-gnu",
             "/home/junze/ceres-solver/build_vo_baseline/lib",
             "/usr/local/lib",
             "/usr/local/cuda/lib64"
         ],
         "name": "pyvoldor_full",
         "runtime_library_dirs": [
+            "/home/junze/anaconda3/envs/677/lib",
             "/home/junze/ceres-solver/build_vo_baseline/lib",
             "/usr/local/cuda/lib64"
         ],

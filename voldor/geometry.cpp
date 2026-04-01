@@ -10,96 +10,146 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 	Config cfg) {
 
 	const int w = flows[0].cols, h = flows[0].rows;
+	const int pixel_count = w * h;
+	auto pose_total_t0 = chrono::high_resolution_clock::now();
+	auto time_stamp = pose_total_t0;
 
-	auto time_stamp = chrono::high_resolution_clock::now();
+	vector<Point2f> pts2_local;
+	vector<Point3f> pts3_local;
+	thread_local vector<Point2f> pts2_reuse;
+	thread_local vector<Point3f> pts3_reuse;
+	vector<Point2f>& pts2 = cfg.pose_fast_mode > 0 ? pts2_reuse : pts2_local;
+	vector<Point3f>& pts3 = cfg.pose_fast_mode > 0 ? pts3_reuse : pts3_local;
+	if ((int)pts2.size() < pixel_count)
+		pts2.resize(pixel_count);
+	if ((int)pts3.size() < pixel_count)
+		pts3.resize(pixel_count);
+	// pts2 is related to frame(active_idx), pts3 is related to frame(active_idx-1).
+	// Thus, the relative pose describe frame(active_idx-1)--[R|Rt]-->frame(active_idx).
 
-	Point2f* pts2 = new Point2f[w*h]; // pts2 is related to frame(active_idx)
-	Point3f* pts3 = new Point3f[w*h]; // pts3 is related to frame(active_idx-1).
-							// Thus, the relative pose describe frame(active_idx-1)--[R|Rt]-->frame(active_idx).
-
-	float** h_flows = new float*[n_flows];
-	float** h_rigidnesses = new float*[n_flows];
-	float** h_Rs = new float*[n_flows];
-	float** h_ts = new float*[n_flows];
+	vector<float*> h_flows(n_flows);
+	vector<float*> h_rigidnesses(n_flows);
+	vector<float*> h_Rs(n_flows);
+	vector<float*> h_ts(n_flows);
 
 	for (int i = 0; i < n_flows; i++) {
-		h_flows[i] = (float*)flows[i].data;
-		h_rigidnesses[i] = (float*)rigidnesses[i].data;
-		h_Rs[i] = (float*)cams[i].R.data;
-		h_ts[i] = (float*)cams[i].t.data;
+		h_flows[i] = (float*) flows[i].data;
+		h_rigidnesses[i] = (float*) rigidnesses[i].data;
+		h_Rs[i] = (float*) cams[i].R.data;
+		h_ts[i] = (float*) cams[i].t.data;
 	}
 
-	Mat pts2_map(Size(w, h), CV_32FC2);
-	Mat pts3_map(Size(w, h), CV_32FC3);
+	Mat pts2_map_local;
+	Mat pts3_map_local;
+	thread_local Mat pts2_map_reuse;
+	thread_local Mat pts3_map_reuse;
+	Mat& pts2_map = cfg.pose_fast_mode > 0 ? pts2_map_reuse : pts2_map_local;
+	Mat& pts3_map = cfg.pose_fast_mode > 0 ? pts3_map_reuse : pts3_map_local;
+	pts2_map.create(Size(w, h), CV_32FC2);
+	pts3_map.create(Size(w, h), CV_32FC3);
+
+	const int max_point_pool = (cfg.pose_fast_mode >= 2) ? min(pixel_count, max(65536, cfg.n_poses_to_sample * 4)) : pixel_count;
+
+	float* p2_map_host_out = cfg.pose_fast_mode >= 2 ? NULL : (float*)pts2_map.data;
+	float* p3_map_host_out = cfg.pose_fast_mode >= 2 ? NULL : (float*)pts3_map.data;
 
 	if (update_batch_instance) {
 		collect_p3p_instances(
-			h_flows, h_rigidnesses, (float*)depth.data, (float*)cams[0].K.data, h_Rs, h_ts,
-			(float*)pts2_map.data, (float*)pts3_map.data,
+			h_flows.data(), h_rigidnesses.data(), (float*)depth.data, (float*)cams[0].K.data, h_Rs.data(), h_ts.data(),
+			p2_map_host_out, p3_map_host_out,
 			n_flows, w, h, active_idx,
 			cfg.rigidness_threshold, cfg.rigidness_sum_threshold,
 			cfg.pose_sample_min_depth, cfg.pose_sample_max_depth, cfg.max_trace_on_flow);
 	}
 	else if (update_iter_instance) {
 		collect_p3p_instances(
-			NULL, h_rigidnesses, (float*)depth.data, NULL, h_Rs, h_ts,
-			(float*)pts2_map.data, (float*)pts3_map.data,
+			NULL, h_rigidnesses.data(), (float*)depth.data, NULL, h_Rs.data(), h_ts.data(),
+			p2_map_host_out, p3_map_host_out,
 			n_flows, w, h, active_idx,
 			cfg.rigidness_threshold, cfg.rigidness_sum_threshold,
 			cfg.pose_sample_min_depth, cfg.pose_sample_max_depth, cfg.max_trace_on_flow);
 	}
 	else {
 		collect_p3p_instances(
-			NULL, NULL, NULL, NULL, h_Rs, h_ts,
-			(float*)pts2_map.data, (float*)pts3_map.data,
+			NULL, NULL, NULL, NULL, h_Rs.data(), h_ts.data(),
+			p2_map_host_out, p3_map_host_out,
 			n_flows, w, h, active_idx,
 			cfg.rigidness_threshold, cfg.rigidness_sum_threshold,
 			cfg.pose_sample_min_depth, cfg.pose_sample_max_depth, cfg.max_trace_on_flow);
 	}
 
-
-
-	delete[] h_flows;
-	delete[] h_rigidnesses;
-	delete[] h_Rs;
-	delete[] h_ts;
-
+	if (!cfg.silent)
+		cout << "[pose] sampling/instance collection time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
+	time_stamp = chrono::high_resolution_clock::now();
 
 	int n_points = 0;
-
-	Point2f* pts2_pt = (Point2f*)pts2_map.data;
-	Point3f* pts3_pt = (Point3f*)pts3_map.data;
-	for (int i = 0; i < w*h; i++) {
-		if (isfinite(pts2_pt->x + pts2_pt->y + pts3_pt->x + pts3_pt->y + pts3_pt->z)) {
-			pts2[n_points] = *pts2_pt;
-			pts3[n_points] = *pts3_pt;
-			n_points++;
-		}
-		pts2_pt++;
-		pts3_pt++;
+	if (cfg.pose_fast_mode >= 2) {
+		compact_p3p_instances(
+			(float*)pts2.data(), (float*)pts3.data(),
+			&n_points, max_point_pool, w, h);
 	}
-
-
-	// check if able to have at least one pose
-	if (n_points < 4) {
-		delete[] pts2;
-		delete[] pts3;
-		return 0;
+	else {
+		Point2f* pts2_pt = (Point2f*)pts2_map.data;
+		Point3f* pts3_pt = (Point3f*)pts3_map.data;
+		for (int i = 0; i < pixel_count && n_points < max_point_pool; i++) {
+			if (isfinite(pts2_pt->x + pts2_pt->y + pts3_pt->x + pts3_pt->y + pts3_pt->z)) {
+				pts2[n_points] = *pts2_pt;
+				pts3[n_points] = *pts3_pt;
+				n_points++;
+			}
+			pts2_pt++;
+			pts3_pt++;
+		}
 	}
 
 	if (!cfg.silent)
-		cout << "sampling collection time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
+		cout << "[pose] dense->sparse compaction time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
 	time_stamp = chrono::high_resolution_clock::now();
 
+	// check if able to have at least one pose
+	if (n_points < 4) {
+		if (!cfg.silent)
+			cout << "[pose] optimize_camera_pose total time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - pose_total_t0).count() / 1e6 << "ms (n_points < 4)." << endl;
+		return 0;
+	}
 
+	int poses_to_sample = cfg.n_poses_to_sample;
+	if (cfg.pose_fast_mode >= 2 && successive_pose) {
+		const float pose_density = cams[active_idx].pose_density;
+		if (pose_density > 0.7f) {
+			poses_to_sample = min(cfg.n_poses_to_sample, 4096);
+		}
+		else if (pose_density > 0.55f) {
+			poses_to_sample = min(cfg.n_poses_to_sample, 6144);
+		}
+		else if (pose_density > 0.45f) {
+			int half_samples = cfg.n_poses_to_sample / 2;
+			poses_to_sample = half_samples > 1024 ? half_samples : 1024;
+		}
+	}
+	else if (successive_pose && cams[active_idx].pose_density > 0.45f) {
+		int half_samples = cfg.n_poses_to_sample / 2;
+		poses_to_sample = half_samples > 1024 ? half_samples : 1024;
+	}
+	int point_limited = n_points * 2;
+	if (point_limited < 512)
+		point_limited = 512;
+	if (poses_to_sample > point_limited)
+		poses_to_sample = point_limited;
+	if (poses_to_sample < 128)
+		poses_to_sample = 128;
+	if (poses_to_sample > cfg.n_poses_to_sample)
+		poses_to_sample = cfg.n_poses_to_sample;
+	if (!cfg.silent)
+		cout << "[pose] compacted points = " << n_points << ", poses_to_sample = " << poses_to_sample << endl;
 
-	Mat poses_pool(cfg.n_poses_to_sample, 6, CV_32F);
+	Mat poses_pool(poses_to_sample, 6, CV_32F);
 	int poses_pool_used = 0;
 
 	if (cfg.cpu_p3p) {
 
 
-		for (int i = 0; i < cfg.n_poses_to_sample; i++) {
+		for (int i = 0; i < poses_to_sample; i++) {
 			int i1 = ((float)rand() / (float)RAND_MAX)*n_points;
 			int i2 = ((float)rand() / (float)RAND_MAX)*n_points;
 			int i3 = ((float)rand() / (float)RAND_MAX)*n_points;
@@ -143,17 +193,25 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		}
 	}
 	else {
-		float* ret_Rs = new float[cfg.n_poses_to_sample * 3];
-		float* ret_ts = new float[cfg.n_poses_to_sample * 3];
+		vector<float> ret_Rs_local(poses_to_sample * 3);
+		vector<float> ret_ts_local(poses_to_sample * 3);
+		thread_local vector<float> ret_Rs_reuse;
+		thread_local vector<float> ret_ts_reuse;
+		vector<float>& ret_Rs = cfg.pose_fast_mode > 0 ? ret_Rs_reuse : ret_Rs_local;
+		vector<float>& ret_ts = cfg.pose_fast_mode > 0 ? ret_ts_reuse : ret_ts_local;
+		if ((int)ret_Rs.size() < poses_to_sample * 3)
+			ret_Rs.resize(poses_to_sample * 3);
+		if ((int)ret_ts.size() < poses_to_sample * 3)
+			ret_ts.resize(poses_to_sample * 3);
 
 		if (cfg.lambdatwist) {
-			solve_batch_p3p_lambdatwist_gpu((float*)pts3, (float*)pts2, ret_Rs, ret_ts, (float*)cams[active_idx].K.data, n_points, cfg.n_poses_to_sample);
+			solve_batch_p3p_lambdatwist_gpu((float*)pts3.data(), (float*)pts2.data(), ret_Rs.data(), ret_ts.data(), (float*)cams[active_idx].K.data, n_points, poses_to_sample);
 		}
 		else {
-			solve_batch_p3p_ap3p_gpu((float*)pts3, (float*)pts2, ret_Rs, ret_ts, (float*)cams[active_idx].K.data, n_points, cfg.n_poses_to_sample);
+			solve_batch_p3p_ap3p_gpu((float*)pts3.data(), (float*)pts2.data(), ret_Rs.data(), ret_ts.data(), (float*)cams[active_idx].K.data, n_points, poses_to_sample);
 		}
 
-		for (int i = 0; i < cfg.n_poses_to_sample; i++) {
+		for (int i = 0; i < poses_to_sample; i++) {
 			if (isfinite(ret_Rs[i * 3 + 0] + ret_Rs[i * 3 + 1] + ret_Rs[i * 3 + 2] + ret_ts[i * 3 + 0] + ret_ts[i * 3 + 1] + ret_ts[i * 3 + 2])) {
 				// This is a solved bug, atan2 is more accurate than acos2 in rodrigues implementation
 				// Due to GPU accuracy issue, GPU p3p sometimes gives pure zero rotation, this will cause incorrect covar in rg_refine process
@@ -163,20 +221,17 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 				poses_pool.at<Vec3f>(poses_pool_used++, 1) = Vec3f(ret_ts[i * 3 + 0], ret_ts[i * 3 + 1], ret_ts[i * 3 + 2]);
 			}
 		}
-
-		delete[] ret_Rs;
-		delete[] ret_ts;
 	}
 
-	delete[] pts2;
-	delete[] pts3;
-
 	if (!cfg.silent)
-		cout << "p3p computing time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
+		cout << "[pose] p3p computing time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
 	time_stamp = chrono::high_resolution_clock::now();
 
-	if (poses_pool_used == 0)
+	if (poses_pool_used == 0) {
+		if (!cfg.silent)
+			cout << "[pose] optimize_camera_pose total time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - pose_total_t0).count() / 1e6 << "ms (no valid pose samples)." << endl;
 		return 0;
+	}
 	poses_pool = poses_pool.rowRange(0, poses_pool_used);
 	cams[active_idx].pose_sample_count = poses_pool_used;
 
@@ -195,7 +250,7 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		poses_pool_used, 6, cfg.meanshift_epsilon, cfg.meanshift_max_iters, cfg.meanshift_max_init_trials, cfg.meanshift_good_init_confidence);
 
 	if (!cfg.silent)
-		cout << "meanshift time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
+		cout << "[pose] meanshift time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
 
 
 	if (rg_refine) {
@@ -242,7 +297,7 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 
 
 		if (!cfg.silent)
-			cout << "gu fit time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
+			cout << "[pose] gu fit time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
 	}
 
 
@@ -257,10 +312,15 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		// copy back pose
 		Rodrigues(pose_opm.at<Vec3f>(0), cams[active_idx].R);
 		cams[active_idx].t.at<Vec3f>(0) = pose_opm.at<Vec3f>(1);
+		if (!cfg.silent)
+			cout << "[pose] optimize_camera_pose total time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - pose_total_t0).count() / 1e6 << "ms." << endl;
 		return 1;
 	}
-	else
+	else {
+		if (!cfg.silent)
+			cout << "[pose] optimize_camera_pose total time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - pose_total_t0).count() / 1e6 << "ms (pose has NAN)." << endl;
 		return 0;
+	}
 
 }
 

@@ -1,8 +1,84 @@
-source /home/junze/anaconda3/bin/activate vo_gs_baseline
-cd /home/junze/VOLDOR_GS_baseline/demo
+source /home/junze/anaconda3/bin/activate 677
+cd /home/junze/VO_677/demo
+
+# Keep runtime libs deterministic (avoid stale CUDA/conda libs from other projects).
+export LD_LIBRARY_PATH="/home/junze/anaconda3/envs/677/lib:/usr/local/cuda/lib64:/usr/local/cuda-12.2/targets/x86_64-linux/lib"
+
+# Build updated extension before benchmark
+cd /home/junze/VO_677/slam_py/install
+python setup_linux_full.py build_ext --inplace
+cp pyvoldor_full.cpython-310-x86_64-linux-gnu.so /home/junze/VO_677/demo/
+cp libgpu-kernels.so /home/junze/VO_677/demo/
+cd /home/junze/VO_677/demo
+
+# Create output dirs
+mkdir -p /home/junze/VO_677/data/result/code_drop041/logs
+mkdir -p /home/junze/VO_677/data/result/code_drop041/poses
+mkdir -p /home/junze/VO_677/data/result/code_drop041/eval
+
+# -------- Baseline x3 (module benchmark) --------
+for i in 1 2 3; do
+  python demo.py \
+    --disp_dir "/home/junze/VO/data/gt/disp_gt" \
+    --flow_dir "/home/junze/VOLDOR_GS/data/input/optical_flow" \
+    --img_dir "/home/junze/VOLDOR_GS/data/input/img" \
+    --fx 586.27075 \
+    --fy 586.27075 \
+    --cx 374.04108 \
+    --cy 202.26265 \
+    --bf 117.254150390625 \
+    --mode stereo \
+    --no_viewer \
+    --voldor_verbose \
+    --voldor_extra_config "--pose_fast_mode 0" \
+    --save_poses "/home/junze/VO_677/data/result/code_drop041/poses/baseline_run${i}.txt" \
+    --save_depths "/home/junze/VO_677/data/result/code_drop041/depths_baseline_run${i}" \
+    > "/home/junze/VO_677/data/result/code_drop041/logs/baseline_run${i}.log" 2>&1
+
+  python ../eval_hl2_pose.py \
+    --gt-file "/home/junze/VO_677/data/gt/poses_gt_comparable_from_eval.txt" \
+    --vo-file "/home/junze/VO_677/data/result/code_drop041/poses/baseline_run${i}.txt" \
+    --output-dir "/home/junze/VO_677/data/result/code_drop041/eval" \
+    > "/home/junze/VO_677/data/result/code_drop041/logs/baseline_run${i}_eval.log" 2>&1
+done
+
+# -------- Optimized x3 (safe module optimization) --------
+for i in 1 2 3; do
+  python demo.py \
+    --disp_dir "/home/junze/VO/data/gt/disp_gt" \
+    --flow_dir "/home/junze/VOLDOR_GS/data/input/optical_flow" \
+    --img_dir "/home/junze/VOLDOR_GS/data/input/img" \
+    --fx 586.27075 \
+    --fy 586.27075 \
+    --cx 374.04108 \
+    --cy 202.26265 \
+    --bf 117.254150390625 \
+    --mode stereo \
+    --no_viewer \
+    --voldor_verbose \
+    --voldor_extra_config "--pose_fast_mode 1" \
+    --save_poses "/home/junze/VO_677/data/result/code_drop041/poses/optimized_run${i}.txt" \
+    --save_depths "/home/junze/VO_677/data/result/code_drop041/depths_optimized_run${i}" \
+    > "/home/junze/VO_677/data/result/code_drop041/logs/optimized_run${i}.log" 2>&1
+
+  python ../eval_hl2_pose.py \
+    --gt-file "/home/junze/VO_677/data/gt/poses_gt_comparable_from_eval.txt" \
+    --vo-file "/home/junze/VO_677/data/result/code_drop041/poses/optimized_run${i}.txt" \
+    --output-dir "/home/junze/VO_677/data/result/code_drop041/eval" \
+    > "/home/junze/VO_677/data/result/code_drop041/logs/optimized_run${i}_eval.log" 2>&1
+done
+
+# Note:
+# - pose_fast_mode=1 is accuracy-preserving optimization focused on pose module internals
+#   (buffer reuse for pts/maps and GPU output buffers).
+# - pose_fast_mode=2 is aggressive (more speed risk, possible accuracy drop), not default for report.
+
+# bash command.txt
+source /home/junze/anaconda3/bin/activate 677
+cd /home/junze/VO_677/demo
 
 # Keep runtime libs deterministic (avoid picking stale CUDA/conda libs from other projects).
-export LD_LIBRARY_PATH="/home/junze/anaconda3/envs/vo_baseline/lib:/usr/local/cuda/lib64:/usr/local/cuda-12.2/targets/x86_64-linux/lib"
+export LD_LIBRARY_PATH="/home/junze/anaconda3/envs/677/lib:/usr/local/cuda/lib64:/usr/local/cuda-12.2/targets/x86_64-linux/lib"
 
 #  --disp_dir "/home/junze/VO/data/gt/disp_gt" \
 python demo.py \
@@ -16,6 +92,8 @@ python demo.py \
   --bf 117.254150390625 \
   --mode stereo \
   --enable_mapping \
-  --enable_loop_closure "/home/junze/VOLDOR_GS_baseline/demo/ORBvoc.bin" \
-  --save_poses "/home/junze/VOLDOR_GS_baseline/data/result/poses/poses_KITTI.txt" \
-  --save_depths "/home/junze/VOLDOR_GS_baseline/data/result/depths"
+  --enable_loop_closure "/home/junze/VO_677/demo/ORBvoc.bin" \
+  --save_poses "/home/junze/VO_677/data/result/poses/poses_KITTI.txt" \
+  --save_depths "/home/junze/VO_677/data/result/depths"
+
+＃bash command.txt

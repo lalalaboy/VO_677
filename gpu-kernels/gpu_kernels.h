@@ -34,6 +34,11 @@ DLL_EXPORT int collect_p3p_instances(
 	float sample_max_depth,
 	int max_trace_on_flow);
 
+DLL_EXPORT int compact_p3p_instances(
+	float* h_o_pts2, float* h_o_pts3,
+	int* h_o_n_points, int max_output_points,
+	int w, int h);
+
 DLL_EXPORT int solve_batch_p3p_ap3p_gpu(float* h_p3s, float* h_p2s,
 	float* h_o_rvecs, float* h_o_tvecs,
 	float* h_K, int N_pts, int N_poses);

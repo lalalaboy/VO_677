@@ -32,6 +32,10 @@ static GMatf d_rigidnesses;
 static GMatf d_rigidnesses_sum;
 static GMatf2 d_p2_map;
 static GMatf3 d_p3_map;
+static float2* d_p2_compact = NULL;
+static float3* d_p3_compact = NULL;
+static int* d_compact_counter = NULL;
+static int compact_capacity = 0;
 
 __device__ __inline__ static void proj_p2_to_p3(float px, float py, float depth, float& ox, float& oy, float& oz) {
 	ox = (_K4_inv[0] * px + _K4_inv[1]) * depth;
@@ -58,9 +62,11 @@ __global__ static void compute_rigidnesses_sum() {
 	int x = blockDim.x*blockIdx.x + threadIdx.x;
 	int y = blockDim.y*blockIdx.y + threadIdx.y;
 	if (x < _w && y < _h) {
-		_d_rigidnesses_sum.at(x, y) = 0;
+		float sum = 0.f;
+#pragma unroll
 		for (int i = 0; i < _N; i++)
-			_d_rigidnesses_sum.at(x, y) += _d_rigidnesses.at(x, y, i);
+			sum += _d_rigidnesses.at(x, y, i);
+		_d_rigidnesses_sum.at(x, y) = sum;
 
 	}
 
@@ -142,6 +148,22 @@ __global__ static void compute_p3p_map(
 
 	}
 
+}
+
+__global__ static void compact_p3p_map(const int max_output_points, float2* d_o_p2, float3* d_o_p3, int* d_o_count) {
+	int x = blockDim.x * blockIdx.x + threadIdx.x;
+	int y = blockDim.y * blockIdx.y + threadIdx.y;
+	if (x < _w && y < _h) {
+		float2 p2 = _d_p2_map.at(x, y);
+		float3 p3 = _d_p3_map.at(x, y);
+		if (isfinite(p2.x + p2.y + p3.x + p3.y + p3.z)) {
+			int out_idx = atomicAdd(d_o_count, 1);
+			if (out_idx < max_output_points) {
+				d_o_p2[out_idx] = p2;
+				d_o_p3[out_idx] = p3;
+			}
+		}
+	}
 }
 
 int collect_p3p_instances(
@@ -245,6 +267,51 @@ int collect_p3p_instances(
 	if (h_o_p3_map)
 		d_p3_map.copy_to_host((float3*)h_o_p3_map, make_cudaPos(0, 0, 0), w, h, 1);
 	gpuErrchk;
+
+	return cudaSuccess;
+}
+
+int compact_p3p_instances(
+	float* h_o_pts2, float* h_o_pts3,
+	int* h_o_n_points, int max_output_points,
+	int w, int h) {
+
+	const int total_pixels = w * h;
+	if (max_output_points <= 0 || max_output_points > total_pixels)
+		max_output_points = total_pixels;
+
+	if (compact_capacity < max_output_points) {
+		if (d_p2_compact) cudaFree(d_p2_compact);
+		if (d_p3_compact) cudaFree(d_p3_compact);
+		cudaMalloc((void**)&d_p2_compact, max_output_points * sizeof(float2));
+		cudaMalloc((void**)&d_p3_compact, max_output_points * sizeof(float3));
+		compact_capacity = max_output_points;
+	}
+	if (!d_compact_counter)
+		cudaMalloc((void**)&d_compact_counter, sizeof(int));
+	gpuErrchk;
+
+	cudaMemset(d_compact_counter, 0, sizeof(int));
+	gpuErrchk;
+
+	const dim3 block_size(BLOCK_WIDTH, BLOCK_WIDTH);
+	const dim3 grid_size(DIV_CEIL(w, BLOCK_WIDTH), DIV_CEIL(h, BLOCK_WIDTH));
+	compact_p3p_map << <grid_size, block_size >> > (max_output_points, d_p2_compact, d_p3_compact, d_compact_counter);
+	gpuErrchk;
+
+	int n_points = 0;
+	cudaMemcpy(&n_points, d_compact_counter, sizeof(int), cudaMemcpyDeviceToHost);
+	gpuErrchk;
+	n_points = n_points > max_output_points ? max_output_points : n_points;
+
+	if (h_o_pts2 && n_points > 0)
+		cudaMemcpy(h_o_pts2, d_p2_compact, n_points * sizeof(float2), cudaMemcpyDeviceToHost);
+	if (h_o_pts3 && n_points > 0)
+		cudaMemcpy(h_o_pts3, d_p3_compact, n_points * sizeof(float3), cudaMemcpyDeviceToHost);
+	gpuErrchk;
+
+	if (h_o_n_points)
+		*h_o_n_points = n_points;
 
 	return cudaSuccess;
 }

@@ -140,6 +140,11 @@ class VOLDOR_SLAM:
         self._block_vo_signal = False
         self._map_lock = RWLock()
         self._viewer_signal_map_changed = False
+        self.vo_prof_total_s = 0.0
+        self.vo_prof_loader_wait_s = 0.0
+        self.vo_prof_kernel_s = 0.0
+        self.vo_prof_calls = 0
+        self.vo_prof_frames = 0
 
         if mode=='stereo':
             self.voldor_config = '--silent --meanshift_kernel_var 0.1 --disp_delta 1 --delta 0.2 --max_iters 4 '
@@ -413,7 +418,21 @@ class VOLDOR_SLAM:
             self.Twc_cur = np.linalg.inv(T6_to_T44(poses_ret[n_frames-1,:6]))
             print(f'solve pgo {fid_start}-{n_frames_total}, n_frames={n_frames}, n_edges={n_edges}')
 
+    def _record_vo_profile(self, total_s, loader_wait_s, kernel_s, advanced_frames):
+        if advanced_frames <= 0:
+            return
+        self.vo_prof_total_s += total_s
+        self.vo_prof_loader_wait_s += loader_wait_s
+        self.vo_prof_kernel_s += kernel_s
+        self.vo_prof_calls += 1
+        self.vo_prof_frames += advanced_frames
+
     def process_vo(self):
+        vo_total_t0 = time.perf_counter()
+        loader_wait_s = 0.0
+        kernel_s = 0.0
+        advanced_frames = 0
+
         # a read lock will work since the 'write' of VO is 'append' that does not change existing map
         with self._map_lock.r_locked():
             if self.fid_cur >= (self.N_FRAMES - 1): # since n_flow = n_frames-1
@@ -439,11 +458,15 @@ class VOLDOR_SLAM:
                     depth_prior_pconfs.append(self.frames[fid].depth_conf)
                     depth_prior_poses.append(T44_to_T6(np.linalg.inv(self.Twc_cur @ self.frames[fid].Tcw)))
             
+            t_loader = time.perf_counter()
             if not self.flow_loader_sync(min(self.fid_cur+self.voldor_winsize-1, self.N_FRAMES-2)):
                 raise 'Flow loader not working or files are missing.'
+            loader_wait_s += time.perf_counter() - t_loader
             if self.mode=='stereo':
+                t_loader = time.perf_counter()
                 if not self.disp_loader_sync(self.fid_cur):
                     raise 'Disparity loader not working or files are missing.'
+                loader_wait_s += time.perf_counter() - t_loader
             py_voldor_kwargs = {
                 'flows': np.stack(self.flows[self.fid_cur:self.fid_cur+self.voldor_winsize], axis=0),
                 'fx':self.fx, 'fy':self.fy, 'cx':self.cx, 'cy':self.cy, 'basefocal':self.basefocal,
@@ -454,7 +477,9 @@ class VOLDOR_SLAM:
                 'config' : self.voldor_config + ' ' + self.voldor_user_config}
 
             py_voldor_funmap = partial(pyvoldor.voldor, **py_voldor_kwargs)
+            t_kernel = time.perf_counter()
             vo_ret = self.cython_process_pool.apply(py_voldor_funmap)
+            kernel_s += time.perf_counter() - t_kernel
 
             
             # if vo failed
@@ -467,11 +492,14 @@ class VOLDOR_SLAM:
                 self.fid_cur_tmpkf = -1
                 self.fid_cur_spakf = -1
                 self.fid_cur = self.fid_cur + 1
+                advanced_frames = 1
                 
             else:
                 if self.mode=='mono-scaled':
+                    t_loader = time.perf_counter()
                     if not self.disp_loader_sync(self.fid_cur):
                         raise 'Disparity loader not working or files are missing.'
+                    loader_wait_s += time.perf_counter() - t_loader
                     mask = vo_ret['depth_conf']>self.depth_scaling_conf_thresh
                     src = self.basefocal / vo_ret['depth'][mask]
                     dst = self.disps[self.fid_cur][mask]
@@ -532,7 +560,14 @@ class VOLDOR_SLAM:
                 # set temporal kf to current frame, move fid_cur pt
                 self.fid_cur_tmpkf = self.fid_cur
                 self.fid_cur = self.fid_cur + vo_step
+                advanced_frames = vo_step
 
+        self._record_vo_profile(
+            total_s=time.perf_counter() - vo_total_t0,
+            loader_wait_s=loader_wait_s,
+            kernel_s=kernel_s,
+            advanced_frames=advanced_frames,
+        )
         return True
 
     def establish_local_links(self, kf_ids):
@@ -724,6 +759,15 @@ class VOLDOR_SLAM:
         self.end_of_vo = True
         print('VO thread ended.')
         print(f'{len(self.kf_ids)} keyframes registered.')
+        if self.vo_prof_calls > 0 and self.vo_prof_frames > 0:
+            avg_call_ms = 1000.0 * self.vo_prof_total_s / self.vo_prof_calls
+            avg_frame_ms = 1000.0 * self.vo_prof_total_s / self.vo_prof_frames
+            avg_loader_ms = 1000.0 * self.vo_prof_loader_wait_s / self.vo_prof_calls
+            avg_kernel_ms = 1000.0 * self.vo_prof_kernel_s / self.vo_prof_calls
+            print('VO timing summary:')
+            print(f'calls={self.vo_prof_calls}, frames={self.vo_prof_frames}')
+            print(f'avg_total={avg_call_ms:.3f} ms/call, {avg_frame_ms:.3f} ms/frame')
+            print(f'avg_loader_wait={avg_loader_ms:.3f} ms/call, avg_voldor_kernel={avg_kernel_ms:.3f} ms/call')
 
 
     def mapping_thread(self):

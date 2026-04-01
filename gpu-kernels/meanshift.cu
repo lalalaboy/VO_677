@@ -13,13 +13,17 @@ template <bool compute_weight_only = false>
 __global__ static void compute_weighted_space(
 	float* d_space, float kernel_var, float* d_o_weight, float* d_o_weighted_space, int N, int dims) {
 	int idx = blockIdx.x*blockDim.x + threadIdx.x;
+	__shared__ float s_mean[MAX_DIMS];
+	if (threadIdx.x < dims)
+		s_mean[threadIdx.x] = c_mean[threadIdx.x];
+	__syncthreads();
 
 	if (idx < N) {
 		float l2_distance_sqr = 0;
 		float weight = 0;
 
 		for (int d = 0; d < dims; d++)
-			l2_distance_sqr += SQR(d_space[idx*dims + d] - c_mean[d]);
+			l2_distance_sqr += SQR(d_space[idx*dims + d] - s_mean[d]);
 
 		weight = expf(-l2_distance_sqr / (2 * kernel_var));
 		d_o_weight[idx] = weight;
@@ -37,23 +41,24 @@ int meanshift_gpu(float* h_space, float kernel_var,
 	float epsilon, int max_iters,
 	int max_init_trials, float good_init_confidence) {
 
-	float* d_space;
-	float* d_weight;
-	float* d_weighted_space;
-	float* ht_mean; // host temp memory for mean. size=dims
-	float* ht_weight; // host temp memory for weight. size=1
-#if 0
-	// pinned memory seems slower if only have small number of iterations
-	cudaMallocHost(&ht_mean, (dims + 1) * sizeof(float));
-	ht_weight = &ht_mean[dims];
-	gpuErrchk;
-#else
-	ht_mean = new float[dims];
-	ht_weight = new float[1];
-#endif
+	static float* d_space = NULL;
+	static float* d_weight = NULL;
+	static float* d_weighted_space = NULL;
+	static int d_space_cap = 0; // in number of float entries
+	static int d_weight_cap = 0; // in number of float entries
+	static int d_weighted_space_cap = 0; // in number of float entries
+	static float* ht_mean = NULL; // host temp memory for mean. size=dims
+	static int ht_mean_cap = 0;
+	float ht_weight[1];
+
+	const int space_need = N * dims;
+	if (space_need > d_space_cap) {
+		if (d_space) cudaFree(d_space);
+		cudaMalloc((void**)&d_space, space_need * sizeof(float));
+		d_space_cap = space_need;
+	}
 
 	// copy space data
-	cudaMalloc((void**)&d_space, N * dims * sizeof(float));
 	cudaMemcpy(d_space, h_space, N * dims * sizeof(float), cudaMemcpyHostToDevice);
 	gpuErrchk;
 
@@ -61,8 +66,23 @@ int meanshift_gpu(float* h_space, float kernel_var,
 	int N_reduce_sum_ext = 0;
 	for (int N_remain = N; N_remain > 1; N_remain = DIV_CEIL(N_remain, 2 * N_THREADS))
 		N_reduce_sum_ext += DIV_CEIL(N_remain, 2 * N_THREADS);
-	cudaMalloc((void**)&d_weight, (N + N_reduce_sum_ext) * sizeof(float));
-	cudaMalloc((void**)&d_weighted_space, (N + N_reduce_sum_ext) * dims * sizeof(float));
+	const int weight_need = N + N_reduce_sum_ext;
+	const int weighted_space_need = (N + N_reduce_sum_ext) * dims;
+	if (weight_need > d_weight_cap) {
+		if (d_weight) cudaFree(d_weight);
+		cudaMalloc((void**)&d_weight, weight_need * sizeof(float));
+		d_weight_cap = weight_need;
+	}
+	if (weighted_space_need > d_weighted_space_cap) {
+		if (d_weighted_space) cudaFree(d_weighted_space);
+		cudaMalloc((void**)&d_weighted_space, weighted_space_need * sizeof(float));
+		d_weighted_space_cap = weighted_space_need;
+	}
+	if (dims > ht_mean_cap) {
+		if (ht_mean) delete[] ht_mean;
+		ht_mean = new float[dims];
+		ht_mean_cap = dims;
+	}
 	gpuErrchk;
 
 	// init mean with external given
@@ -132,19 +152,6 @@ int meanshift_gpu(float* h_space, float kernel_var,
 		cudaMemcpyToSymbol(c_mean, h_io_mean, dims * sizeof(float));
 		gpuErrchk;
 	}
-
-#if 0
-	cudaFreeHost(ht_mean);
-	cudaFreeHost(ht_weight);
-#else
-	delete[] ht_mean;
-	delete[] ht_weight;
-#endif
-
-	cudaFree(d_space);
-	cudaFree(d_weight);
-	cudaFree(d_weighted_space);
-	gpuErrchk;
 
 	return cudaSuccess;
 }
