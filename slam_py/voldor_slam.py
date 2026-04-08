@@ -3,17 +3,24 @@ import time
 import numpy as np
 import cv2
 from flow_utils import load_flow
-try:
-    import pyvoldor_full as pyvoldor
-    pyvoldor_module = 'full'
-    print('Full pyvoldor module loaded.')
-except:
-    try:
-        import pyvoldor_vo as pyvoldor
-        pyvoldor_module = 'vo'
-        print('VO pyvoldor module loaded.')
-    except:
-        raise 'Cannot load pyvoldor module.'
+# try:
+#     import pyvoldor_full as pyvoldor
+#     pyvoldor_module = 'full'
+#     print('Full pyvoldor module loaded.')
+# except:
+#     try:
+#         import pyvoldor_vo as pyvoldor
+#         pyvoldor_module = 'vo'
+#         print('VO pyvoldor module loaded.')
+#     except:
+#         raise 'Cannot load pyvoldor module.'
+
+import pyvoldor_full as pyvoldor
+pyvoldor_module = 'full'
+print('Full pyvoldor module loaded.')
+
+
+
 from slam_utils import *
 import multiprocessing
 import threading
@@ -134,6 +141,7 @@ class VOLDOR_SLAM:
         self.voldor_user_config = '' # specify parameters for VO
         self.disable_dp = False # disable temporal and spatial depth priors for VO
         self.disable_local_mapping = False
+        self.enable_debug_windows = False
 
         # internal use
         self._use_loop_closure = False
@@ -278,7 +286,8 @@ class VOLDOR_SLAM:
                 time.sleep(0.01)
 
             img = cv2.imread(os.path.join(image_path, fn), cv2.IMREAD_COLOR)
-
+            print(os.path.join(image_path, fn))
+            
             if img.shape[0] != self.h or img.shape[1] != self.w:
                 img = cv2.resize(img, (self.w, self.h))
 
@@ -346,11 +355,13 @@ class VOLDOR_SLAM:
         if pyvoldor_module != 'full':
             print('Error: Loop closure not available. Need full pyvoldor module.')
             return
-        try:
-            import pyDBoW3 as bow
-        except:
-            print('Error: Loop closure not available. Cannot load pyDBoW3 module.')
-            return
+        # try:
+        #     import pyDBoW3 as bow
+        # except:
+        #     print('Error: Loop closure not available. Cannot load pyDBoW3 module.')
+        #     return
+        
+        import pyDBoW3 as bow
         
         voc = bow.Vocabulary()
         print(f'Loading vocabulary from {voc_path} ...')
@@ -749,7 +760,7 @@ class VOLDOR_SLAM:
             #if self.fid_cur_tmpkf>=0:
                 #print('current scale = ', self.frames[0].scale,self.frames[-1].scale)
             #print(f'{self.fid_cur}  <-  {self.fid_cur_tmpkf}, {self.fid_cur_spakf}')
-            if self.fid_cur_tmpkf >= 0:
+            if self.enable_debug_windows and self.fid_cur_tmpkf >= 0:
                 cv2.imshow('tmpkf_depth', (self.basefocal*0.04)/self.frames[self.fid_cur_tmpkf].get_scaled_depth())
                 cv2.imshow('tmpkf_depth_conf', self.frames[self.fid_cur_tmpkf].depth_conf)
                 if cv2.waitKey(1) == 113:
@@ -777,7 +788,7 @@ class VOLDOR_SLAM:
         print('Mapping thread started')
         n_kfs_registered = 0
         next_pgo_kfid = self.pgo_refine_kf_interval
-        link_mask = np.zeros((self.N_FRAMES,self.N_FRAMES), np.bool) # already matched mask
+        link_mask = np.zeros((self.N_FRAMES,self.N_FRAMES), dtype=bool) # already matched mask
         priority_mat = np.zeros((self.N_FRAMES, self.N_FRAMES), np.float32)
         lc_pairs = set()
         new_local_link_flag = False
@@ -870,6 +881,4 @@ class VOLDOR_SLAM:
         self.solve_pgo()
         self._viewer_signal_map_changed = True
         print('Mapping thread end.')
-
-
 

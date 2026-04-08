@@ -54,6 +54,7 @@ parser.add_argument('--enable_mapping', action='store_true')
 parser.add_argument('--no_viewer', action='store_true', help='Disable viewer thread for headless/benchmark runs.')
 parser.add_argument('--save_poses', type=str)
 parser.add_argument('--save_depths', type=str)
+parser.add_argument('--no_viewer', action='store_true')
 
 opt = parser.parse_args()
 if opt.abs_resize is None:
@@ -63,7 +64,6 @@ import sys
 import threading
 
 sys.path.append('../slam_py')
-from voldor_viewer import VOLDOR_Viewer
 from voldor_slam import VOLDOR_SLAM
 
 if __name__ == '__main__':
@@ -72,8 +72,7 @@ if __name__ == '__main__':
 
     # init slam instance and select mode from mono/mono-scaled/stereo
     slam = VOLDOR_SLAM(mode=opt.mode)
-    if opt.voldor_verbose:
-        slam.voldor_config = ' '.join(tok for tok in slam.voldor_config.split() if tok != '--silent') + ' '
+    slam.enable_debug_windows = not opt.no_viewer
 
     # set camera intrinsic
     slam.set_cam_params(opt.fx,opt.fy,opt.cx,opt.cy,opt.bf, rescale=opt.resize)
@@ -101,8 +100,8 @@ if __name__ == '__main__':
         slam.disp_loader_sync(0, block_when_uninit=True)
     
     # start viewer
-    viewer_thread = None
     if not opt.no_viewer:
+        from voldor_viewer import VOLDOR_Viewer
         viewer = VOLDOR_Viewer(slam)
         viewer_thread = threading.Thread(target=viewer.start)
         viewer_thread.start()
