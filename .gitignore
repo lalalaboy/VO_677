@@ -8,5 +8,5 @@ slam_py/install/voldor
 slam_py/install/pyvoldor_full.cpp
 data
 .codex
-slam_py/install/setup_linux_full.py
 **/__pycache__/
+demo/pyDBoW3.so
