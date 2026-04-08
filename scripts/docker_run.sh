@@ -3,7 +3,7 @@
 DOCKER_BUILDKIT=1 docker build --ssh default=$HOME/.ssh/id_ed25519 -t gsvoldor:cuda11.4 .
 
 
-xhost +local:docker
+# xhost +local:docker
 # docker run --gpus all -it --rm \
 #   -e DISPLAY=$DISPLAY \
 #   -v /tmp/.X11-unix:/tmp/.X11-unix \
