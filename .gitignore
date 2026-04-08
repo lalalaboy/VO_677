@@ -2,9 +2,9 @@ slam_py/install/build
 slam_py/install/frame-alignment
 slam_py/install/pose-graph
 slam_py/install/voldor
-# **/libgpu-kernels.so
-# **/pyvoldor_vo*.so
-# **/pyvoldor_full*.so
+**/libgpu-kernels.so
+**/pyvoldor_vo*.so
+**/pyvoldor_full*.so
 slam_py/install/pyvoldor_full.cpp
 data
 .codex
