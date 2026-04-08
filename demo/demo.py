@@ -54,7 +54,6 @@ parser.add_argument('--enable_mapping', action='store_true')
 parser.add_argument('--no_viewer', action='store_true', help='Disable viewer thread for headless/benchmark runs.')
 parser.add_argument('--save_poses', type=str)
 parser.add_argument('--save_depths', type=str)
-parser.add_argument('--no_viewer', action='store_true')
 
 opt = parser.parse_args()
 if opt.abs_resize is None:
