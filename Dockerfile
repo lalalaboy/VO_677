@@ -31,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libjpeg-dev \
     libpng-dev \
     libtiff-dev \
+    libgtk2.0-dev \
     libgl1-mesa-dev \
     freeglut3-dev \
     libglu1-mesa-dev \
@@ -64,7 +65,7 @@ RUN python3.8 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
     PyOpenGL \
     PyOpenGL-accelerate \
     scikit-learn \
-    opencv-python-headless
+    opencv-python
 
 RUN cd /tmp \
     && curl -L https://archives.boost.io/release/1.74.0/source/boost_1_74_0.tar.bz2 -o boost_1_74_0.tar.bz2 \
