@@ -15,5 +15,5 @@ exec python3.8 demo.py \
   --enable_loop_closure "./ORBvoc.bin" \
   --save_poses "../data/result/poses/poses_KITTI.txt" \
   --save_depths "../data/result/depths" \
-  # --no_viewer
+  --no_viewer
 
