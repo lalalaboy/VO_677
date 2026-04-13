@@ -353,3 +353,20 @@ int compact_p3p_instances(
 
 	return cudaSuccess;
 }
+
+int compact_p3p_instances_device(
+	float** d_o_pts2, float** d_o_pts3,
+	int* h_o_n_points, int max_output_points,
+	int w, int h) {
+
+	const int status = compact_p3p_instances(NULL, NULL, h_o_n_points, max_output_points, w, h);
+	if (status != cudaSuccess)
+		return status;
+
+	if (d_o_pts2)
+		*d_o_pts2 = h_o_n_points && *h_o_n_points > 0 ? (float*)d_p2_compact : NULL;
+	if (d_o_pts3)
+		*d_o_pts3 = h_o_n_points && *h_o_n_points > 0 ? (float*)d_p3_compact : NULL;
+
+	return cudaSuccess;
+}

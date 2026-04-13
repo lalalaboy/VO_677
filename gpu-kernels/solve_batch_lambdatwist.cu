@@ -54,8 +54,10 @@ __global__ static void init_rand_states(curandState* d_rand_states, int N) {
 		curand_init(RAND_SEED, idx, 0, &d_rand_states[idx]);
 }
 
-
-int solve_batch_p3p_lambdatwist_gpu(float* h_p3s, float* h_p2s, float* h_o_rvecs, float* h_o_tvecs, float* h_K, int N_pts, int N_poses) {
+static int solve_batch_p3p_lambdatwist_gpu_impl(
+	float* d_p3s, float* d_p2s,
+	float* h_o_rvecs, float* h_o_tvecs,
+	float* h_K, int N_pts, int N_poses) {
 
 	// copy K to gpu constant memory
 	static float cache_symbols[4] = { 0 };
@@ -64,15 +66,6 @@ int solve_batch_p3p_lambdatwist_gpu(float* h_p3s, float* h_p2s, float* h_o_rvecs
 		CUDA_UPDATE_SYMBOL_IF_CHANGED(h_K[2], cache_symbols[2], _cx);
 		CUDA_UPDATE_SYMBOL_IF_CHANGED(h_K[4], cache_symbols[1], _fy);
 		CUDA_UPDATE_SYMBOL_IF_CHANGED(h_K[5], cache_symbols[3], _cy);
-	}
-
-	// persistent device buffers to avoid repeated malloc/free in hot path
-	if (N_pts > pts_cap) {
-		if (d_p2s_cache) cudaFree(d_p2s_cache);
-		if (d_p3s_cache) cudaFree(d_p3s_cache);
-		cudaMalloc((void**)&d_p2s_cache, N_pts * 2 * sizeof(float));
-		cudaMalloc((void**)&d_p3s_cache, N_pts * 3 * sizeof(float));
-		pts_cap = N_pts;
 	}
 	if (N_poses > poses_cap) {
 		if (d_rvecs_cache) cudaFree(d_rvecs_cache);
@@ -84,12 +77,9 @@ int solve_batch_p3p_lambdatwist_gpu(float* h_p3s, float* h_p2s, float* h_o_rvecs
 		init_rand_states << <DIV_CEIL(N_poses, N_THREADS), N_THREADS >> > (d_rand_states_cache, N_poses);
 		poses_cap = N_poses;
 	}
-	cudaMemcpy(d_p2s_cache, h_p2s, N_pts * 2 * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_p3s_cache, h_p3s, N_pts * 3 * sizeof(float), cudaMemcpyHostToDevice);
-	gpuErrchk;
 
 	// solve batch ap3p
-	solve << <DIV_CEIL(N_poses, N_THREADS), N_THREADS >> > (d_p2s_cache, d_p3s_cache, d_rvecs_cache, d_tvecs_cache, d_rand_states_cache, N_pts, N_poses);
+	solve << <DIV_CEIL(N_poses, N_THREADS), N_THREADS >> > (d_p2s, d_p3s, d_rvecs_cache, d_tvecs_cache, d_rand_states_cache, N_pts, N_poses);
 	gpuErrchk;
 
 	// copy back R,t
@@ -98,4 +88,22 @@ int solve_batch_p3p_lambdatwist_gpu(float* h_p3s, float* h_p2s, float* h_o_rvecs
 	gpuErrchk;
 
 	return cudaSuccess;
+}
+
+int solve_batch_p3p_lambdatwist_gpu(float* h_p3s, float* h_p2s, float* h_o_rvecs, float* h_o_tvecs, float* h_K, int N_pts, int N_poses) {
+	if (N_pts > pts_cap) {
+		if (d_p2s_cache) cudaFree(d_p2s_cache);
+		if (d_p3s_cache) cudaFree(d_p3s_cache);
+		cudaMalloc((void**)&d_p2s_cache, N_pts * 2 * sizeof(float));
+		cudaMalloc((void**)&d_p3s_cache, N_pts * 3 * sizeof(float));
+		pts_cap = N_pts;
+	}
+	cudaMemcpy(d_p2s_cache, h_p2s, N_pts * 2 * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_p3s_cache, h_p3s, N_pts * 3 * sizeof(float), cudaMemcpyHostToDevice);
+	gpuErrchk;
+	return solve_batch_p3p_lambdatwist_gpu_impl(d_p3s_cache, d_p2s_cache, h_o_rvecs, h_o_tvecs, h_K, N_pts, N_poses);
+}
+
+int solve_batch_p3p_lambdatwist_gpu_device(float* d_p3s, float* d_p2s, float* h_o_rvecs, float* h_o_tvecs, float* h_K, int N_pts, int N_poses) {
+	return solve_batch_p3p_lambdatwist_gpu_impl(d_p3s, d_p2s, h_o_rvecs, h_o_tvecs, h_K, N_pts, N_poses);
 }

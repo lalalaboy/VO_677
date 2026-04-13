@@ -38,11 +38,21 @@ DLL_EXPORT int compact_p3p_instances(
 	float* h_o_pts2, float* h_o_pts3,
 	int* h_o_n_points, int max_output_points,
 	int w, int h);
+DLL_EXPORT int compact_p3p_instances_device(
+	float** d_o_pts2, float** d_o_pts3,
+	int* h_o_n_points, int max_output_points,
+	int w, int h);
 
 DLL_EXPORT int solve_batch_p3p_ap3p_gpu(float* h_p3s, float* h_p2s,
 	float* h_o_rvecs, float* h_o_tvecs,
 	float* h_K, int N_pts, int N_poses);
 DLL_EXPORT int solve_batch_p3p_lambdatwist_gpu(float* h_p3s, float* h_p2s,
+	float* h_o_rvecs, float* h_o_tvecs,
+	float* h_K, int N_pts, int N_poses);
+DLL_EXPORT int solve_batch_p3p_ap3p_gpu_device(float* d_p3s, float* d_p2s,
+	float* h_o_rvecs, float* h_o_tvecs,
+	float* h_K, int N_pts, int N_poses);
+DLL_EXPORT int solve_batch_p3p_lambdatwist_gpu_device(float* d_p3s, float* d_p2s,
 	float* h_o_rvecs, float* h_o_tvecs,
 	float* h_K, int N_pts, int N_poses);
 
@@ -77,4 +87,3 @@ DLL_EXPORT int align_frame_eval_gpu(
 	const float* h_params_tar,
 	float* h_o_residual, float* h_o_jacobian,
 	const bool apply_weights = true);
-

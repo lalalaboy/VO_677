@@ -11,4 +11,5 @@ extern int py_voldor_wrapper(
 	int& n_registered, float* poses, float* poses_covar, float* depth, float* depth_conf,
 	float& sampling_collection_ms_total, float& p3p_computing_ms_total,
 	float& meanshift_ms_total, float& gu_fit_ms_total,
+	float& total_runtime_ms_per_frame,
 	int& pose_opt_timed_calls, int& pose_opt_gu_fit_calls);

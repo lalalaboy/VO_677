@@ -7,6 +7,10 @@ struct PoseOptimizeTiming {
 	float p3p_computing_ms = 0.0f;
 	float meanshift_ms = 0.0f;
 	float gu_fit_ms = 0.0f;
+
+	float total_ms() const {
+		return sampling_collection_ms + p3p_computing_ms + meanshift_ms + gu_fit_ms;
+	}
 };
 
 int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses, 

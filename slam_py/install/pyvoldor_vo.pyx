@@ -12,6 +12,7 @@ cdef extern from "../../voldor/py_export.h":
         int& n_registered, float* poses, float* poses_covar, float* depth, float* depth_conf,
         float& sampling_collection_ms_total, float& p3p_computing_ms_total,
         float& meanshift_ms_total, float& gu_fit_ms_total,
+        float& total_runtime_ms_per_frame,
         int& pose_opt_timed_calls, int& pose_opt_gu_fit_calls)
 
 def voldor(
@@ -54,6 +55,7 @@ def voldor(
     cdef float p3p_computing_ms_total = 0
     cdef float meanshift_ms_total = 0
     cdef float gu_fit_ms_total = 0
+    cdef float total_runtime_ms_per_frame = 0
     cdef int pose_opt_timed_calls = 0
     cdef int pose_opt_gu_fit_calls = 0
     py_voldor_wrapper(
@@ -75,6 +77,7 @@ def voldor(
                 p3p_computing_ms_total,
                 meanshift_ms_total,
                 gu_fit_ms_total,
+                total_runtime_ms_per_frame,
                 pose_opt_timed_calls,
                 pose_opt_gu_fit_calls)
 
@@ -87,5 +90,6 @@ def voldor(
             'p3p_computing_ms_total': p3p_computing_ms_total,
             'meanshift_ms_total': meanshift_ms_total,
             'gu_fit_ms_total': gu_fit_ms_total,
+            'total_runtime_ms_per_frame': total_runtime_ms_per_frame,
             'pose_opt_timed_calls': pose_opt_timed_calls,
             'pose_opt_gu_fit_calls': pose_opt_gu_fit_calls}

@@ -14,8 +14,10 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 
 	auto time_stamp = chrono::high_resolution_clock::now();
 
-	Point2f* pts2 = new Point2f[w*h]; // pts2 is related to frame(active_idx)
-	Point3f* pts3 = new Point3f[w*h]; // pts3 is related to frame(active_idx-1).
+	Point2f* pts2 = NULL; // pts2 is related to frame(active_idx)
+	Point3f* pts3 = NULL; // pts3 is related to frame(active_idx-1).
+	float* d_pts2 = NULL;
+	float* d_pts3 = NULL;
 							// Thus, the relative pose describe frame(active_idx-1)--[R|Rt]-->frame(active_idx).
 
 	float** h_flows = new float*[n_flows];
@@ -64,13 +66,20 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 
 
 	int n_points = 0;
-	compact_p3p_instances((float*)pts2, (float*)pts3, &n_points, w * h, w, h);
+	if (cfg.cpu_p3p) {
+		pts2 = new Point2f[w*h];
+		pts3 = new Point3f[w*h];
+		compact_p3p_instances((float*)pts2, (float*)pts3, &n_points, w * h, w, h);
+	}
+	else {
+		compact_p3p_instances_device(&d_pts2, &d_pts3, &n_points, w * h, w, h);
+	}
 
 
 	// GPU compaction returns 0 when fewer than 4 valid correspondences are available.
 	if (n_points <= 0) {
-		delete[] pts2;
-		delete[] pts3;
+		if (pts2) delete[] pts2;
+		if (pts3) delete[] pts3;
 		return 0;
 	}
 
@@ -134,10 +143,10 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		float* ret_ts = new float[cfg.n_poses_to_sample * 3];
 
 		if (cfg.lambdatwist) {
-			solve_batch_p3p_lambdatwist_gpu((float*)pts3, (float*)pts2, ret_Rs, ret_ts, (float*)cams[active_idx].K.data, n_points, cfg.n_poses_to_sample);
+			solve_batch_p3p_lambdatwist_gpu_device(d_pts3, d_pts2, ret_Rs, ret_ts, (float*)cams[active_idx].K.data, n_points, cfg.n_poses_to_sample);
 		}
 		else {
-			solve_batch_p3p_ap3p_gpu((float*)pts3, (float*)pts2, ret_Rs, ret_ts, (float*)cams[active_idx].K.data, n_points, cfg.n_poses_to_sample);
+			solve_batch_p3p_ap3p_gpu_device(d_pts3, d_pts2, ret_Rs, ret_ts, (float*)cams[active_idx].K.data, n_points, cfg.n_poses_to_sample);
 		}
 
 		for (int i = 0; i < cfg.n_poses_to_sample; i++) {
@@ -155,8 +164,8 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		delete[] ret_ts;
 	}
 
-	delete[] pts2;
-	delete[] pts3;
+	if (pts2) delete[] pts2;
+	if (pts3) delete[] pts3;
 
 	if (timing)
 		timing->p3p_computing_ms = chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6;
