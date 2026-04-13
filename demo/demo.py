@@ -129,3 +129,10 @@ if __name__ == '__main__':
     processed_frames = max(int(slam.fid_cur), 1)
     print(f'demo total runtime = {total_s:.3f} s')
     print(f'demo throughput = {processed_frames / total_s:.3f} frames/s')
+    if getattr(slam, 'vo_prof_pose_calls', 0) > 0:
+        print('demo avg optimize_camera_pose:')
+        print(f'  sampling={slam.vo_prof_pose_sampling_ms / slam.vo_prof_pose_calls:.3f} ms/run')
+        print(f'  p3p={slam.vo_prof_pose_p3p_ms / slam.vo_prof_pose_calls:.3f} ms/run')
+        print(f'  meanshift={slam.vo_prof_pose_meanshift_ms / slam.vo_prof_pose_calls:.3f} ms/run')
+        if getattr(slam, 'vo_prof_pose_gu_fit_calls', 0) > 0:
+            print(f'  gu_fit={slam.vo_prof_pose_gu_fit_ms / slam.vo_prof_pose_gu_fit_calls:.3f} ms/run')

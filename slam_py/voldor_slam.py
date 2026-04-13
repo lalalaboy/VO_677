@@ -151,6 +151,12 @@ class VOLDOR_SLAM:
         self.vo_prof_total_s = 0.0
         self.vo_prof_loader_wait_s = 0.0
         self.vo_prof_kernel_s = 0.0
+        self.vo_prof_pose_sampling_ms = 0.0
+        self.vo_prof_pose_p3p_ms = 0.0
+        self.vo_prof_pose_meanshift_ms = 0.0
+        self.vo_prof_pose_gu_fit_ms = 0.0
+        self.vo_prof_pose_calls = 0
+        self.vo_prof_pose_gu_fit_calls = 0
         self.vo_prof_calls = 0
         self.vo_prof_frames = 0
 
@@ -429,12 +435,21 @@ class VOLDOR_SLAM:
             self.Twc_cur = np.linalg.inv(T6_to_T44(poses_ret[n_frames-1,:6]))
             print(f'solve pgo {fid_start}-{n_frames_total}, n_frames={n_frames}, n_edges={n_edges}')
 
-    def _record_vo_profile(self, total_s, loader_wait_s, kernel_s, advanced_frames):
+    def _record_vo_profile(
+        self, total_s, loader_wait_s, kernel_s, advanced_frames,
+        pose_sampling_ms=0.0, pose_p3p_ms=0.0, pose_meanshift_ms=0.0, pose_gu_fit_ms=0.0,
+        pose_calls=0, pose_gu_fit_calls=0):
         if advanced_frames <= 0:
             return
         self.vo_prof_total_s += total_s
         self.vo_prof_loader_wait_s += loader_wait_s
         self.vo_prof_kernel_s += kernel_s
+        self.vo_prof_pose_sampling_ms += pose_sampling_ms
+        self.vo_prof_pose_p3p_ms += pose_p3p_ms
+        self.vo_prof_pose_meanshift_ms += pose_meanshift_ms
+        self.vo_prof_pose_gu_fit_ms += pose_gu_fit_ms
+        self.vo_prof_pose_calls += pose_calls
+        self.vo_prof_pose_gu_fit_calls += pose_gu_fit_calls
         self.vo_prof_calls += 1
         self.vo_prof_frames += advanced_frames
 
@@ -443,6 +458,12 @@ class VOLDOR_SLAM:
         loader_wait_s = 0.0
         kernel_s = 0.0
         advanced_frames = 0
+        pose_sampling_ms = 0.0
+        pose_p3p_ms = 0.0
+        pose_meanshift_ms = 0.0
+        pose_gu_fit_ms = 0.0
+        pose_calls = 0
+        pose_gu_fit_calls = 0
 
         # a read lock will work since the 'write' of VO is 'append' that does not change existing map
         with self._map_lock.r_locked():
@@ -491,6 +512,12 @@ class VOLDOR_SLAM:
             t_kernel = time.perf_counter()
             vo_ret = self.cython_process_pool.apply(py_voldor_funmap)
             kernel_s += time.perf_counter() - t_kernel
+            pose_sampling_ms += float(vo_ret.get('sampling_collection_ms_total', 0.0))
+            pose_p3p_ms += float(vo_ret.get('p3p_computing_ms_total', 0.0))
+            pose_meanshift_ms += float(vo_ret.get('meanshift_ms_total', 0.0))
+            pose_gu_fit_ms += float(vo_ret.get('gu_fit_ms_total', 0.0))
+            pose_calls += int(vo_ret.get('pose_opt_timed_calls', 0))
+            pose_gu_fit_calls += int(vo_ret.get('pose_opt_gu_fit_calls', 0))
 
             
             # if vo failed
@@ -578,6 +605,12 @@ class VOLDOR_SLAM:
             loader_wait_s=loader_wait_s,
             kernel_s=kernel_s,
             advanced_frames=advanced_frames,
+            pose_sampling_ms=pose_sampling_ms,
+            pose_p3p_ms=pose_p3p_ms,
+            pose_meanshift_ms=pose_meanshift_ms,
+            pose_gu_fit_ms=pose_gu_fit_ms,
+            pose_calls=pose_calls,
+            pose_gu_fit_calls=pose_gu_fit_calls,
         )
         return True
 
@@ -779,6 +812,13 @@ class VOLDOR_SLAM:
             print(f'calls={self.vo_prof_calls}, frames={self.vo_prof_frames}')
             print(f'avg_total={avg_call_ms:.3f} ms/call, {avg_frame_ms:.3f} ms/frame')
             print(f'avg_loader_wait={avg_loader_ms:.3f} ms/call, avg_voldor_kernel={avg_kernel_ms:.3f} ms/call')
+            if self.vo_prof_pose_calls > 0:
+                print('avg_optimize_camera_pose:')
+                print(f'  sampling={self.vo_prof_pose_sampling_ms / self.vo_prof_pose_calls:.3f} ms/run')
+                print(f'  p3p={self.vo_prof_pose_p3p_ms / self.vo_prof_pose_calls:.3f} ms/run')
+                print(f'  meanshift={self.vo_prof_pose_meanshift_ms / self.vo_prof_pose_calls:.3f} ms/run')
+                if self.vo_prof_pose_gu_fit_calls > 0:
+                    print(f'  gu_fit={self.vo_prof_pose_gu_fit_ms / self.vo_prof_pose_gu_fit_calls:.3f} ms/run')
 
 
     def mapping_thread(self):
@@ -881,4 +921,3 @@ class VOLDOR_SLAM:
         self.solve_pgo()
         self._viewer_signal_map_changed = True
         print('Mapping thread end.')
-

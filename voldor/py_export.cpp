@@ -10,7 +10,10 @@ int py_voldor_wrapper(
 	const int N, const int N_dp, const int w, const int h,
 	const char* config_pt,
 	// outputs
-	int& n_registered, float* poses_pt, float* poses_covar_pt, float* depth_pt, float* depth_conf_pt) {
+	int& n_registered, float* poses_pt, float* poses_covar_pt, float* depth_pt, float* depth_conf_pt,
+	float& sampling_collection_ms_total, float& p3p_computing_ms_total,
+	float& meanshift_ms_total, float& gu_fit_ms_total,
+	int& pose_opt_timed_calls, int& pose_opt_gu_fit_calls) {
 
 	Config cfg;
 	std::istringstream iss(config_pt);
@@ -52,6 +55,12 @@ int py_voldor_wrapper(
 	VOLDOR voldor(cfg);
 	voldor.init(flows, disparity, disparity_pconf, depth_priors, depth_prior_poses, depth_priors_pconfs);
 	voldor.solve();
+	sampling_collection_ms_total = voldor.pose_opt_timing_total.sampling_collection_ms;
+	p3p_computing_ms_total = voldor.pose_opt_timing_total.p3p_computing_ms;
+	meanshift_ms_total = voldor.pose_opt_timing_total.meanshift_ms;
+	gu_fit_ms_total = voldor.pose_opt_timing_total.gu_fit_ms;
+	pose_opt_timed_calls = voldor.pose_opt_timed_calls;
+	pose_opt_gu_fit_calls = voldor.pose_opt_gu_fit_calls;
 
 	n_registered = voldor.n_flows;
 

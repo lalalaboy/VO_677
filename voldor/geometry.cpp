@@ -7,7 +7,8 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 	int n_flows, int active_idx, bool successive_pose,
 	bool rg_refine,
 	bool update_batch_instance, bool update_iter_instance,
-	Config cfg) {
+	Config cfg,
+	PoseOptimizeTiming* timing) {
 
 	const int w = flows[0].cols, h = flows[0].rows;
 
@@ -87,8 +88,8 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		return 0;
 	}
 
-	if (!cfg.silent)
-		cout << "sampling collection time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
+	if (timing)
+		timing->sampling_collection_ms = chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6;
 	time_stamp = chrono::high_resolution_clock::now();
 
 
@@ -171,8 +172,8 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 	delete[] pts2;
 	delete[] pts3;
 
-	if (!cfg.silent)
-		cout << "p3p computing time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
+	if (timing)
+		timing->p3p_computing_ms = chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6;
 	time_stamp = chrono::high_resolution_clock::now();
 
 	if (poses_pool_used == 0)
@@ -194,8 +195,8 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		(float*)pose_opm.data, &cams[active_idx].pose_density, &cams[active_idx].last_used_ms_iters, successive_pose,
 		poses_pool_used, 6, cfg.meanshift_epsilon, cfg.meanshift_max_iters, cfg.meanshift_max_init_trials, cfg.meanshift_good_init_confidence);
 
-	if (!cfg.silent)
-		cout << "meanshift time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
+	if (timing)
+		timing->meanshift_ms = chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6;
 
 
 	if (rg_refine) {
@@ -240,9 +241,8 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		pose_opm /= cfg.rg_pose_scaling;
 		//poses_pool /= cfg.rg_pose_scaling; // this is not used later, no need scale back
 
-
-		if (!cfg.silent)
-			cout << "gu fit time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
+		if (timing)
+			timing->gu_fit_ms = chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6;
 	}
 
 

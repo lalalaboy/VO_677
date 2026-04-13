@@ -9,7 +9,10 @@ cdef extern from "../../voldor/py_export.h":
         const float fx, const float fy, const float cx, const float cy, const float basefocal,
         const int N, const int N_dp, const int w, const int h,
         const char* config,
-        int& n_registered, float* poses, float* poses_covar, float* depth, float* depth_conf)
+        int& n_registered, float* poses, float* poses_covar, float* depth, float* depth_conf,
+        float& sampling_collection_ms_total, float& p3p_computing_ms_total,
+        float& meanshift_ms_total, float& gu_fit_ms_total,
+        int& pose_opt_timed_calls, int& pose_opt_gu_fit_calls)
 
 def voldor(
     np.ndarray[float, ndim=4] flows not None,
@@ -47,6 +50,12 @@ def voldor(
         np.ascontiguousarray(np.zeros((h, w), dtype=np.float32))
 
     cdef int n_registered = 0
+    cdef float sampling_collection_ms_total = 0
+    cdef float p3p_computing_ms_total = 0
+    cdef float meanshift_ms_total = 0
+    cdef float gu_fit_ms_total = 0
+    cdef int pose_opt_timed_calls = 0
+    cdef int pose_opt_gu_fit_calls = 0
     py_voldor_wrapper(
                 &flows[0,0,0,0],
                 &disparity[0,0] if disparity is not None else NULL,
@@ -61,11 +70,22 @@ def voldor(
                 &poses[0,0],
                 &poses_covar[0,0,0],
                 &depth[0,0],
-                &depth_conf[0,0])
+                &depth_conf[0,0],
+                sampling_collection_ms_total,
+                p3p_computing_ms_total,
+                meanshift_ms_total,
+                gu_fit_ms_total,
+                pose_opt_timed_calls,
+                pose_opt_gu_fit_calls)
 
     return {'n_registered': n_registered,
             'poses': poses[:n_registered],
             'poses_covar': poses_covar[:n_registered],
             'depth': depth,
-            'depth_conf': depth_conf}
-
+            'depth_conf': depth_conf,
+            'sampling_collection_ms_total': sampling_collection_ms_total,
+            'p3p_computing_ms_total': p3p_computing_ms_total,
+            'meanshift_ms_total': meanshift_ms_total,
+            'gu_fit_ms_total': gu_fit_ms_total,
+            'pose_opt_timed_calls': pose_opt_timed_calls,
+            'pose_opt_gu_fit_calls': pose_opt_gu_fit_calls}

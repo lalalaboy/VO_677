@@ -30,6 +30,9 @@ public:
 	vector<Mat> flows;
 	vector<Mat> rigidnesses;
 	vector<Camera> cams;
+	PoseOptimizeTiming pose_opt_timing_total;
+	int pose_opt_timed_calls = 0;
+	int pose_opt_gu_fit_calls = 0;
 
 	KittiGround ground;
 

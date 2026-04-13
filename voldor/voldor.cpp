@@ -14,6 +14,9 @@ void VOLDOR::init(vector<Mat> _flows,
 	cams.clear();
 	iters_cur = 0;
 	iters_remain = cfg.max_iters;
+	pose_opt_timing_total = PoseOptimizeTiming();
+	pose_opt_timed_calls = 0;
+	pose_opt_gu_fit_calls = 0;
 
 	// we assume flow, disparity and camera parameters need apply resize
 	// while depth_prior and their poses are pre-resized since they are usually previous VOLDOR result
@@ -171,6 +174,7 @@ void VOLDOR::optimize_cameras() {
 		cams[i].pose_rigidness_density = (float)sum(rigidnesses[i])[0] / (float)(w*h);
 
 		int optimize_success = 0;
+		PoseOptimizeTiming pose_timing;
 		if (!allow_trunc || cams[i].pose_rigidness_density > cfg.trunc_rigidness_density) {
 			optimize_success = optimize_camera_pose(flows, rigidnesses, depth, cams,
 				n_flows, i,
@@ -178,7 +182,15 @@ void VOLDOR::optimize_cameras() {
 				cfg.rg_refine && (!cfg.rg_refine_last_only || iters_remain == 0), //rg_refine?
 				!cfg.exclusive_gpu_context || (iters_cur == 1 && i == 0),  //update batch instance?
 				i == 0, //update iter instance?
-				cfg);
+				cfg,
+				&pose_timing);
+			pose_opt_timing_total.sampling_collection_ms += pose_timing.sampling_collection_ms;
+			pose_opt_timing_total.p3p_computing_ms += pose_timing.p3p_computing_ms;
+			pose_opt_timing_total.meanshift_ms += pose_timing.meanshift_ms;
+			pose_opt_timing_total.gu_fit_ms += pose_timing.gu_fit_ms;
+			pose_opt_timed_calls++;
+			if (pose_timing.gu_fit_ms > 0.0f)
+				pose_opt_gu_fit_calls++;
 		}
 
 		if (!cfg.silent)
