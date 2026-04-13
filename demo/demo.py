@@ -104,6 +104,8 @@ if __name__ == '__main__':
         viewer = VOLDOR_Viewer(slam)
         viewer_thread = threading.Thread(target=viewer.start)
         viewer_thread.start()
+    else:
+        viewer_thread = None
     
     # start VO and mapping threads
     vo_thread = threading.Thread(target=slam.vo_thread)
