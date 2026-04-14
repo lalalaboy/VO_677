@@ -131,6 +131,8 @@ if __name__ == '__main__':
     processed_frames = max(int(slam.fid_cur), 1)
     print(f'demo total runtime = {total_s:.3f} s')
     print(f'demo throughput = {processed_frames / total_s:.3f} frames/s')
+    if getattr(slam, 'vo_prof_frames', 0) > 0:
+        print(f'demo avg voldor wall time = {1000.0 * slam.vo_prof_total_s / slam.vo_prof_frames:.3f} ms/frame')
     if getattr(slam, 'vo_prof_pose_calls', 0) > 0:
         print('demo avg optimize_camera_pose:')
         print(f'  sampling={slam.vo_prof_pose_sampling_ms / slam.vo_prof_pose_calls:.3f} ms/run')
