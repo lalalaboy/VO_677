@@ -13,6 +13,7 @@ int py_voldor_wrapper(
 	int& n_registered, float* poses_pt, float* poses_covar_pt, float* depth_pt, float* depth_conf_pt,
 	float& sampling_collection_ms_total, float& p3p_computing_ms_total,
 	float& meanshift_ms_total, float& gu_fit_ms_total,
+	float& total_runtime_ms_per_frame,
 	int& pose_opt_timed_calls, int& pose_opt_gu_fit_calls) {
 
 	Config cfg;
@@ -61,6 +62,8 @@ int py_voldor_wrapper(
 	gu_fit_ms_total = voldor.pose_opt_timing_total.gu_fit_ms;
 	pose_opt_timed_calls = voldor.pose_opt_timed_calls;
 	pose_opt_gu_fit_calls = voldor.pose_opt_gu_fit_calls;
+	total_runtime_ms_per_frame = pose_opt_timed_calls > 0 ?
+		voldor.pose_opt_timing_total.total_ms() / pose_opt_timed_calls : 0.0f;
 
 	n_registered = voldor.n_flows;
 

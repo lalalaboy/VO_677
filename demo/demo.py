@@ -134,7 +134,14 @@ if __name__ == '__main__':
     if getattr(slam, 'vo_prof_frames', 0) > 0:
         print(f'demo avg voldor wall time = {1000.0 * slam.vo_prof_total_s / slam.vo_prof_frames:.3f} ms/frame')
     if getattr(slam, 'vo_prof_pose_calls', 0) > 0:
+        avg_pose_total_ms = (
+            slam.vo_prof_pose_sampling_ms +
+            slam.vo_prof_pose_p3p_ms +
+            slam.vo_prof_pose_meanshift_ms +
+            slam.vo_prof_pose_gu_fit_ms
+        ) / slam.vo_prof_pose_calls
         print('demo avg optimize_camera_pose:')
+        print(f'  total={avg_pose_total_ms:.3f} ms/frame')
         print(f'  sampling={slam.vo_prof_pose_sampling_ms / slam.vo_prof_pose_calls:.3f} ms/run')
         print(f'  p3p={slam.vo_prof_pose_p3p_ms / slam.vo_prof_pose_calls:.3f} ms/run')
         print(f'  meanshift={slam.vo_prof_pose_meanshift_ms / slam.vo_prof_pose_calls:.3f} ms/run')

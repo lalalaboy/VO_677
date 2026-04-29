@@ -14,8 +14,10 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 
 	auto time_stamp = chrono::high_resolution_clock::now();
 
-	Point2f* pts2 = new Point2f[w*h]; // pts2 is related to frame(active_idx)
-	Point3f* pts3 = new Point3f[w*h]; // pts3 is related to frame(active_idx-1).
+	Point2f* pts2 = NULL; // pts2 is related to frame(active_idx)
+	Point3f* pts3 = NULL; // pts3 is related to frame(active_idx-1).
+	float* d_pts2 = NULL;
+	float* d_pts3 = NULL;
 							// Thus, the relative pose describe frame(active_idx-1)--[R|Rt]-->frame(active_idx).
 
 	float** h_flows = new float*[n_flows];
@@ -30,13 +32,10 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		h_ts[i] = (float*)cams[i].t.data;
 	}
 
-	Mat pts2_map(Size(w, h), CV_32FC2);
-	Mat pts3_map(Size(w, h), CV_32FC3);
-
 	if (update_batch_instance) {
 		collect_p3p_instances(
 			h_flows, h_rigidnesses, (float*)depth.data, (float*)cams[0].K.data, h_Rs, h_ts,
-			(float*)pts2_map.data, (float*)pts3_map.data,
+			NULL, NULL,
 			n_flows, w, h, active_idx,
 			cfg.rigidness_threshold, cfg.rigidness_sum_threshold,
 			cfg.pose_sample_min_depth, cfg.pose_sample_max_depth, cfg.max_trace_on_flow);
@@ -44,7 +43,7 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 	else if (update_iter_instance) {
 		collect_p3p_instances(
 			NULL, h_rigidnesses, (float*)depth.data, NULL, h_Rs, h_ts,
-			(float*)pts2_map.data, (float*)pts3_map.data,
+			NULL, NULL,
 			n_flows, w, h, active_idx,
 			cfg.rigidness_threshold, cfg.rigidness_sum_threshold,
 			cfg.pose_sample_min_depth, cfg.pose_sample_max_depth, cfg.max_trace_on_flow);
@@ -52,7 +51,7 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 	else {
 		collect_p3p_instances(
 			NULL, NULL, NULL, NULL, h_Rs, h_ts,
-			(float*)pts2_map.data, (float*)pts3_map.data,
+			NULL, NULL,
 			n_flows, w, h, active_idx,
 			cfg.rigidness_threshold, cfg.rigidness_sum_threshold,
 			cfg.pose_sample_min_depth, cfg.pose_sample_max_depth, cfg.max_trace_on_flow);
@@ -67,24 +66,20 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 
 
 	int n_points = 0;
-
-	Point2f* pts2_pt = (Point2f*)pts2_map.data;
-	Point3f* pts3_pt = (Point3f*)pts3_map.data;
-	for (int i = 0; i < w*h; i++) {
-		if (isfinite(pts2_pt->x + pts2_pt->y + pts3_pt->x + pts3_pt->y + pts3_pt->z)) {
-			pts2[n_points] = *pts2_pt;
-			pts3[n_points] = *pts3_pt;
-			n_points++;
-		}
-		pts2_pt++;
-		pts3_pt++;
+	if (cfg.cpu_p3p) {
+		pts2 = new Point2f[w*h];
+		pts3 = new Point3f[w*h];
+		compact_p3p_instances((float*)pts2, (float*)pts3, &n_points, w * h, w, h);
+	}
+	else {
+		compact_p3p_instances_device(&d_pts2, &d_pts3, &n_points, w * h, w, h);
 	}
 
 
-	// check if able to have at least one pose
-	if (n_points < 4) {
-		delete[] pts2;
-		delete[] pts3;
+	// GPU compaction returns 0 when fewer than 4 valid correspondences are available.
+	if (n_points <= 0) {
+		if (pts2) delete[] pts2;
+		if (pts3) delete[] pts3;
 		return 0;
 	}
 
@@ -148,10 +143,10 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		float* ret_ts = new float[cfg.n_poses_to_sample * 3];
 
 		if (cfg.lambdatwist) {
-			solve_batch_p3p_lambdatwist_gpu((float*)pts3, (float*)pts2, ret_Rs, ret_ts, (float*)cams[active_idx].K.data, n_points, cfg.n_poses_to_sample);
+			solve_batch_p3p_lambdatwist_gpu_device(d_pts3, d_pts2, ret_Rs, ret_ts, (float*)cams[active_idx].K.data, n_points, cfg.n_poses_to_sample);
 		}
 		else {
-			solve_batch_p3p_ap3p_gpu((float*)pts3, (float*)pts2, ret_Rs, ret_ts, (float*)cams[active_idx].K.data, n_points, cfg.n_poses_to_sample);
+			solve_batch_p3p_ap3p_gpu_device(d_pts3, d_pts2, ret_Rs, ret_ts, (float*)cams[active_idx].K.data, n_points, cfg.n_poses_to_sample);
 		}
 
 		for (int i = 0; i < cfg.n_poses_to_sample; i++) {
@@ -169,8 +164,8 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		delete[] ret_ts;
 	}
 
-	delete[] pts2;
-	delete[] pts3;
+	if (pts2) delete[] pts2;
+	if (pts3) delete[] pts3;
 
 	if (timing)
 		timing->p3p_computing_ms = chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6;
