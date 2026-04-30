@@ -1,6 +1,8 @@
 # source /home/junze/anaconda3/bin/activate vo_gs_baseline
 cd ./demo
 export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/local/cuda/lib64
+export GLOG_minloglevel=2
+export GLOG_logtostderr=1
 exec python3.8 demo.py \
   --disp_dir "../data/gt/disp_gt" \
   --flow_dir "../data/input/optical_flow" \
@@ -11,9 +13,10 @@ exec python3.8 demo.py \
   --cy 202.26265 \
   --bf 117.254150390625 \
   --mode stereo \
-  --enable_mapping \
-  --enable_loop_closure "./ORBvoc.bin" \
+  --no_viewer \
   --save_poses "../data/result/poses/poses_KITTI.txt" \
-  --save_depths "../data/result/depths" \
-  --no_viewer
+  --save_depths "../data/result/depths"
+
+#--enable_mapping \
+#--enable_loop_closure "./ORBvoc.bin" \
 

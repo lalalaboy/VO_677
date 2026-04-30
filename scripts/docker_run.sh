@@ -6,6 +6,8 @@ DOCKER_BUILDKIT=1 docker build --ssh default=$HOME/.ssh/id_ed25519 -t gsvoldor:c
 xhost +local:docker
 docker run --gpus all -it --rm \
   -e DISPLAY=$DISPLAY \
+  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display \
+  -e QT_X11_NO_MITSHM=1 \
   -v /tmp/.X11-unix:/tmp/.X11-unix \
   -v $(pwd):/workspace/gsvoldor \
   -w /workspace/gsvoldor \

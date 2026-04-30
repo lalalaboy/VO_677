@@ -96,6 +96,7 @@ bool SolveOptimizationProblem(ceres::Problem* problem, bool debug) {
 	ceres::Solver::Options options;
 	options.max_num_iterations = 100;
 	options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
+	options.minimizer_progress_to_stdout = false;
 
 	ceres::Solver::Summary summary;
 	ceres::Solve(options, problem, &summary);
