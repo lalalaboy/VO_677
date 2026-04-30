@@ -14,6 +14,41 @@ __constant__ static float c_covar[(MAX_DIMS*MAX_DIMS + MAX_DIMS) / 2];
 #endif
 //__constant__ static float c_A; // gaussian normalize constant
 
+// Reuse device buffers across calls to avoid frequent cudaMalloc/cudaFree overhead.
+static float* s_d_space = nullptr;
+static float* s_d_weight = nullptr;
+static float* s_d_weighted_covar = nullptr;
+static float* s_d_partial_stats = nullptr;
+static float* s_d_reduced_stats = nullptr;
+#ifdef FULL_LEDOIT_WOLF_ESTIMATOR
+static float* s_d_weighted_LW_b2 = nullptr;
+#endif
+
+static size_t s_space_capacity_bytes = 0;
+static size_t s_weight_capacity_bytes = 0;
+static size_t s_weighted_covar_capacity_bytes = 0;
+static size_t s_partial_stats_capacity_bytes = 0;
+static size_t s_reduced_stats_capacity_bytes = 0;
+#ifdef FULL_LEDOIT_WOLF_ESTIMATOR
+static size_t s_weighted_LW_b2_capacity_bytes = 0;
+#endif
+
+constexpr int MAX_COVAR_DIMS = (MAX_DIMS * MAX_DIMS + MAX_DIMS) / 2;
+constexpr int MAX_STATS_DIMS = 1 + MAX_DIMS + MAX_COVAR_DIMS; // weight + mean + covar
+
+template <typename T>
+static void ensure_device_buffer_capacity(T*& d_ptr, size_t& capacity_bytes, size_t required_bytes) {
+	if (required_bytes <= capacity_bytes)
+		return;
+	if (d_ptr != nullptr) {
+		cudaFree(d_ptr);
+		d_ptr = nullptr;
+		capacity_bytes = 0;
+	}
+	cudaMalloc((void**)&d_ptr, required_bytes);
+	capacity_bytes = required_bytes;
+}
+
 template <typename T1, typename T2>
 static void covar_half_to_full(const T1* half, T2* full, const int dims) {
 	for (int d1 = 0; d1 < dims; d1++) {
@@ -52,18 +87,33 @@ __global__ static void compute_LW_b2(float* d_weight, float* d_weighted_covar, f
 }
 #endif
 
-// computes weights/weighted-mean/weighted-covar for each sample
-__global__ static void e_step( // c_mean, c_covar_inv are needed
+__device__ __forceinline__ static float warp_reduce_sum(float val) {
+	for (int offset = 16; offset > 0; offset >>= 1)
+		val += __shfl_down_sync(0xffffffff, val, offset);
+	return val;
+}
+
+// computes per-sample values and partially reduces weight/mean/covar per block
+__global__ static void e_step_partial_reduce( // c_mean, c_covar_inv are needed
 	float* d_space,
-	float* d_o_weight, float* d_o_weighted_space, float* d_o_weighted_covar,
+	float* d_o_weight, float* d_o_weighted_covar, float* d_o_partial_stats,
 	float trunc_sigma,
 	int N, int dims) {
 
 	int idx = blockIdx.x*blockDim.x + threadIdx.x;
+	const int tid = threadIdx.x;
+	const int lane = tid & 31;
+	const int warp_id = tid >> 5;
+	const int n_warps = blockDim.x >> 5;
+	const int covar_dims = (dims*dims + dims) / 2;
+	const int stats_dims = 1 + dims + covar_dims;
+	__shared__ float s_warp_partials[8 * MAX_STATS_DIMS]; // N_THREADS=256 => max 8 warps
+
+	float diff[MAX_DIMS];
+	float weight = 0.0f;
+	float stats[MAX_STATS_DIMS]{ 0 };
 
 	if (idx < N) {
-		float diff[MAX_DIMS];
-
 		for (int d = 0; d < dims; d++)
 			diff[d] = d_space[idx*dims + d] - c_mean[d];
 
@@ -81,18 +131,66 @@ __global__ static void e_step( // c_mean, c_covar_inv are needed
 		}
 		z_score = sqrtf(z_score);
 
-		const float weight = z_score < trunc_sigma ? 1 : 0;
+		weight = z_score < trunc_sigma ? 1 : 0;
 
 		d_o_weight[idx] = weight;
-
-		for (int d = 0; d < dims; d++)
-			d_o_weighted_space[idx*dims + d] = weight * d_space[idx*dims + d];
-
-		const int covar_dims = (dims*dims + dims) / 2;
 		for (int d1 = 0; d1 < dims; d1++)
 			for (int d2 = 0; d2 <= d1; d2++)
 				d_o_weighted_covar[idx*covar_dims + (d1*d1 + d1) / 2 + d2] = weight * diff[d1] * diff[d2];
+	}
 
+	stats[0] = weight;
+	for (int d = 0; d < dims; d++)
+		stats[1 + d] = weight * (idx < N ? d_space[idx*dims + d] : 0.0f);
+	for (int d1 = 0; d1 < dims; d1++)
+		for (int d2 = 0; d2 <= d1; d2++)
+			stats[1 + dims + (d1*d1 + d1) / 2 + d2] = weight * (idx < N ? diff[d1] * diff[d2] : 0.0f);
+
+	for (int c = 0; c < stats_dims; c++)
+		stats[c] = warp_reduce_sum(stats[c]);
+
+	if (lane == 0) {
+		for (int c = 0; c < stats_dims; c++)
+			s_warp_partials[warp_id * MAX_STATS_DIMS + c] = stats[c];
+	}
+	__syncthreads();
+
+	float block_val = 0.0f;
+	if (warp_id == 0) {
+		for (int c = 0; c < stats_dims; c++) {
+			block_val = (lane < n_warps) ? s_warp_partials[lane * MAX_STATS_DIMS + c] : 0.0f;
+			block_val = warp_reduce_sum(block_val);
+			if (lane == 0)
+				d_o_partial_stats[blockIdx.x * MAX_STATS_DIMS + c] = block_val;
+		}
+	}
+}
+
+// second-stage reduction across blocks, using warp + block reduction
+__global__ static void reduce_partial_stats(float* d_partial_stats, float* d_o_stats, int n_blocks, int stats_dims) {
+	const int tid = threadIdx.x;
+	const int lane = tid & 31;
+	const int warp_id = tid >> 5;
+	const int n_warps = blockDim.x >> 5;
+	__shared__ float s_warp_partials[8 * MAX_STATS_DIMS]; // N_THREADS=256 => max 8 warps
+
+	for (int c = 0; c < stats_dims; c++) {
+		float sum = 0.0f;
+		for (int i = tid; i < n_blocks; i += blockDim.x)
+			sum += d_partial_stats[i * MAX_STATS_DIMS + c];
+
+		sum = warp_reduce_sum(sum);
+		if (lane == 0)
+			s_warp_partials[warp_id * MAX_STATS_DIMS + c] = sum;
+		__syncthreads();
+
+		if (warp_id == 0) {
+			float block_sum = (lane < n_warps) ? s_warp_partials[lane * MAX_STATS_DIMS + c] : 0.0f;
+			block_sum = warp_reduce_sum(block_sum);
+			if (lane == 0)
+				d_o_stats[c] = block_sum;
+		}
+		__syncthreads();
 	}
 }
 
@@ -107,10 +205,11 @@ int fit_robust_gaussian(
 	if (dims > MAX_DIMS)
 		throw;
 
-	float* d_space;
-	float* d_weight;
-	float* d_weighted_space;
-	float* d_weighted_covar;
+	float* d_space = nullptr;
+	float* d_weight = nullptr;
+	float* d_weighted_covar = nullptr;
+	float* d_partial_stats = nullptr;
+	float* d_reduced_stats = nullptr;
 
 	float* ht_weight; // host temp memory for weight. size=1
 	float* ht_mean; // host temp memory for mean. size=dims
@@ -118,6 +217,7 @@ int fit_robust_gaussian(
 	float* ht_covar_inv; // host temp memory for mean. size=dims*dims
 	double* ht_covar_full; // host temp memory for mean. size=dims*dims
 	double* ht_covar_inv_full; // host temp memory for mean. size=dims*dims
+	float* ht_stats; // host temp memory for reduced stats. size=MAX_STATS_DIMS
 
 	const int dims_covar = (dims*dims + dims) / 2;
 
@@ -127,6 +227,7 @@ int fit_robust_gaussian(
 	ht_covar_inv = new float[dims_covar];
 	ht_covar_full = new double[dims*dims];
 	ht_covar_inv_full = new double[dims*dims];
+	ht_stats = new float[MAX_STATS_DIMS];
 
 	*ht_weight = 0;
 	for (int d = 0; d < dims; d++)
@@ -136,25 +237,43 @@ int fit_robust_gaussian(
 			ht_covar[(d1*d1 + d1) / 2 + d2] = h_io_covar[d1*dims + d2];
 
 
+	// reuse cached device buffers and only grow when needed
+	const size_t required_space_bytes = (size_t)N * (size_t)dims * sizeof(float);
+	ensure_device_buffer_capacity(s_d_space, s_space_capacity_bytes, required_space_bytes);
+	d_space = s_d_space;
+
 	// copy space data
-	cudaMalloc((void**)&d_space, N * dims * sizeof(float));
-	cudaMemcpy(d_space, h_space, N * dims * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_space, h_space, required_space_bytes, cudaMemcpyHostToDevice);
 	gpuErrchk;
 
 	// allocate device buffer (weight map & weighted space map)
 	int N_reduce_sum_ext = 0;
 	for (int N_remain = N; N_remain > 1; N_remain = DIV_CEIL(N_remain, 2 * N_THREADS))
 		N_reduce_sum_ext += DIV_CEIL(N_remain, 2 * N_THREADS);
-	cudaMalloc((void**)&d_weight, (N + N_reduce_sum_ext) * sizeof(float));
-	cudaMalloc((void**)&d_weighted_space, (N + N_reduce_sum_ext) * dims * sizeof(float));
-	cudaMalloc((void**)&d_weighted_covar, (N + N_reduce_sum_ext) * dims_covar * sizeof(float));
+
+	const size_t required_weight_bytes = (size_t)(N + N_reduce_sum_ext) * sizeof(float);
+	const size_t required_weighted_covar_bytes = (size_t)(N + N_reduce_sum_ext) * (size_t)dims_covar * sizeof(float);
+	const int n_blocks = DIV_CEIL(N, N_THREADS);
+	const int stats_dims = 1 + dims + dims_covar;
+	const size_t required_partial_stats_bytes = (size_t)n_blocks * MAX_STATS_DIMS * sizeof(float);
+	const size_t required_reduced_stats_bytes = (size_t)MAX_STATS_DIMS * sizeof(float);
+	ensure_device_buffer_capacity(s_d_weight, s_weight_capacity_bytes, required_weight_bytes);
+	ensure_device_buffer_capacity(s_d_weighted_covar, s_weighted_covar_capacity_bytes, required_weighted_covar_bytes);
+	ensure_device_buffer_capacity(s_d_partial_stats, s_partial_stats_capacity_bytes, required_partial_stats_bytes);
+	ensure_device_buffer_capacity(s_d_reduced_stats, s_reduced_stats_capacity_bytes, required_reduced_stats_bytes);
+	d_weight = s_d_weight;
+	d_weighted_covar = s_d_weighted_covar;
+	d_partial_stats = s_d_partial_stats;
+	d_reduced_stats = s_d_reduced_stats;
 	gpuErrchk;
 
 #ifdef FULL_LEDOIT_WOLF_ESTIMATOR
 	float* d_weighted_LW_b2;
 	float* ht_LW_b2; // host temp memory for LW_b2. size=1
 	ht_LW_b2 = new float[1];
-	cudaMalloc((void**)&d_weighted_LW_b2, (N + N_reduce_sum_ext) * sizeof(float));
+	const size_t required_weighted_LW_b2_bytes = (size_t)(N + N_reduce_sum_ext) * sizeof(float);
+	ensure_device_buffer_capacity(s_d_weighted_LW_b2, s_weighted_LW_b2_capacity_bytes, required_weighted_LW_b2_bytes);
+	d_weighted_LW_b2 = s_d_weighted_LW_b2;
 #endif
 
 	if (used_iters != NULL)
@@ -208,11 +327,11 @@ int fit_robust_gaussian(
 
 		// compute displacement
 		float prev_density = *ht_weight / N;
-		e_step << <DIV_CEIL(N, N_THREADS), N_THREADS >> > (d_space, d_weight, d_weighted_space, d_weighted_covar, trunc_sigma, N, dims);
-
-		// m step
-		reduce_vector_sum<N_THREADS>(d_weight, ht_weight, N, 1);
+		e_step_partial_reduce << <n_blocks, N_THREADS >> > (d_space, d_weight, d_weighted_covar, d_partial_stats, trunc_sigma, N, dims);
+		reduce_partial_stats << <1, N_THREADS >> > (d_partial_stats, d_reduced_stats, n_blocks, stats_dims);
+		cudaMemcpy(ht_stats, d_reduced_stats, stats_dims * sizeof(float), cudaMemcpyDeviceToHost);
 		gpuErrchk;
+		*ht_weight = ht_stats[0];
 
 		if (!isfinite(*ht_weight)) {
 			result_is_reliable = false;
@@ -229,9 +348,10 @@ int fit_robust_gaussian(
 		// update mean and covar only if no converge.
 		// otherwise, mean and covar(reged) used in pervious iteration will be returned.
 
-		reduce_vector_sum<N_THREADS>(d_weighted_space, ht_mean, N, dims);
-		reduce_vector_sum<N_THREADS>(d_weighted_covar, ht_covar, N, dims_covar);
-		gpuErrchk;
+		for (int d = 0; d < dims; d++)
+			ht_mean[d] = ht_stats[1 + d];
+		for (int d = 0; d < dims_covar; d++)
+			ht_covar[d] = ht_stats[1 + dims + d];
 
 		for (int d = 0; d < dims; d++)
 			ht_mean[d] /= *ht_weight;
@@ -268,13 +388,9 @@ int fit_robust_gaussian(
 	delete[] ht_covar_inv;
 	delete[] ht_covar_full;
 	delete[] ht_covar_inv_full;
+	delete[] ht_stats;
 
-	cudaFree(d_space);
-	cudaFree(d_weight);
-	cudaFree(d_weighted_space);
-	cudaFree(d_weighted_covar);
 #ifdef FULL_LEDOIT_WOLF_ESTIMATOR
-	cudaFree(d_weighted_LW_b2);
 	delete[] ht_LW_b2;
 #endif
 	gpuErrchk;
