@@ -147,3 +147,24 @@ if __name__ == '__main__':
         print(f'  meanshift={slam.vo_prof_pose_meanshift_ms / slam.vo_prof_pose_calls:.3f} ms/run')
         if getattr(slam, 'vo_prof_pose_gu_fit_calls', 0) > 0:
             print(f'  gu_fit={slam.vo_prof_pose_gu_fit_ms / slam.vo_prof_pose_gu_fit_calls:.3f} ms/run')
+    if getattr(slam, 'vo_prof_depth_calls', 0) > 0:
+        avg_depth_total_ms = (
+            slam.vo_prof_depth_cache_upload_ms +
+            slam.vo_prof_depth_fb_smooth_ms +
+            slam.vo_prof_depth_init_cost_ms +
+            slam.vo_prof_depth_rand_prop_ms +
+            slam.vo_prof_depth_global_prop_ms +
+            slam.vo_prof_depth_local_prop_ms +
+            slam.vo_prof_depth_update_rigidness_ms +
+            slam.vo_prof_depth_copy_back_ms
+        ) / slam.vo_prof_depth_calls
+        print('demo avg optimize_depth:')
+        print(f'  total={avg_depth_total_ms:.3f} ms/frame')
+        print(f'  cache_upload={slam.vo_prof_depth_cache_upload_ms / slam.vo_prof_depth_calls:.3f} ms/run')
+        print(f'  fb_smooth={slam.vo_prof_depth_fb_smooth_ms / slam.vo_prof_depth_calls:.3f} ms/run')
+        print(f'  init_cost={slam.vo_prof_depth_init_cost_ms / slam.vo_prof_depth_calls:.3f} ms/run')
+        print(f'  rand_prop={slam.vo_prof_depth_rand_prop_ms / slam.vo_prof_depth_calls:.3f} ms/run')
+        print(f'  global_prop={slam.vo_prof_depth_global_prop_ms / slam.vo_prof_depth_calls:.3f} ms/run')
+        print(f'  local_prop={slam.vo_prof_depth_local_prop_ms / slam.vo_prof_depth_calls:.3f} ms/run')
+        print(f'  update_rigidness={slam.vo_prof_depth_update_rigidness_ms / slam.vo_prof_depth_calls:.3f} ms/run')
+        print(f'  copy_back={slam.vo_prof_depth_copy_back_ms / slam.vo_prof_depth_calls:.3f} ms/run')

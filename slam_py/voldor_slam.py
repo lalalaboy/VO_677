@@ -147,6 +147,7 @@ class VOLDOR_SLAM:
         self._use_loop_closure = False
         self._block_vo_signal = False
         self._map_lock = RWLock()
+        self._pipeline_cv = threading.Condition()
         self._viewer_signal_map_changed = False
         self.vo_prof_total_s = 0.0
         self.vo_prof_loader_wait_s = 0.0
@@ -157,6 +158,15 @@ class VOLDOR_SLAM:
         self.vo_prof_pose_gu_fit_ms = 0.0
         self.vo_prof_pose_calls = 0
         self.vo_prof_pose_gu_fit_calls = 0
+        self.vo_prof_depth_cache_upload_ms = 0.0
+        self.vo_prof_depth_fb_smooth_ms = 0.0
+        self.vo_prof_depth_init_cost_ms = 0.0
+        self.vo_prof_depth_rand_prop_ms = 0.0
+        self.vo_prof_depth_global_prop_ms = 0.0
+        self.vo_prof_depth_local_prop_ms = 0.0
+        self.vo_prof_depth_update_rigidness_ms = 0.0
+        self.vo_prof_depth_copy_back_ms = 0.0
+        self.vo_prof_depth_calls = 0
         self.vo_prof_calls = 0
         self.vo_prof_frames = 0
 
@@ -224,35 +234,43 @@ class VOLDOR_SLAM:
         print(f'Camera parameters set to {self.fx}, {self.fy}, {self.cx}, {self.cy}, {self.basefocal}')
 
     def flow_loader_sync(self, fid_query, no_block=False, block_when_uninit=False):
-        if (self.flow_loader_pt == -1 and not block_when_uninit) \
-            or fid_query >= self.N_FRAMES-1:
+        if fid_query >= self.N_FRAMES-1:
             return False
-        while self.flow_loader_pt <= fid_query:
-            if no_block:
+        with self._pipeline_cv:
+            if self.flow_loader_pt == -1 and not block_when_uninit:
                 return False
-            time.sleep(0.01)
-        return True
+            while self.flow_loader_pt <= fid_query:
+                if no_block:
+                    return False
+                self._pipeline_cv.wait(timeout=0.01)
+            return True
     def image_loader_sync(self, fid_query, no_block=False, block_when_uninit=False):
-        if (self.image_loader_pt == -1 and not block_when_uninit) \
-            or fid_query >= self.N_FRAMES-1:
+        if fid_query >= self.N_FRAMES-1:
             return False
-        while self.image_loader_pt <= fid_query:
-            if no_block:
+        with self._pipeline_cv:
+            if self.image_loader_pt == -1 and not block_when_uninit:
                 return False
-            time.sleep(0.01)
-        return True
+            while self.image_loader_pt <= fid_query:
+                if no_block:
+                    return False
+                self._pipeline_cv.wait(timeout=0.01)
+            return True
     def disp_loader_sync(self, fid_query, no_block=False, block_when_uninit=False):
-        if (self.disp_loader_pt == -1 and not block_when_uninit) \
-            or fid_query >= self.N_FRAMES-1:
+        if fid_query >= self.N_FRAMES-1:
             return False
-        while self.disp_loader_pt <= fid_query:
-            if no_block:
+        with self._pipeline_cv:
+            if self.disp_loader_pt == -1 and not block_when_uninit:
                 return False
-            time.sleep(0.01)
-        return True
+            while self.disp_loader_pt <= fid_query:
+                if no_block:
+                    return False
+                self._pipeline_cv.wait(timeout=0.01)
+            return True
         
     def flow_loader(self, flow_path, resize=1.0, n_cache=100, range=(0,0)):
-        self.flow_loader_pt = 0
+        with self._pipeline_cv:
+            self.flow_loader_pt = 0
+            self._pipeline_cv.notify_all()
 
         flow_fn_list = sorted(os.listdir(flow_path))
         if range != (0,0):
@@ -264,8 +282,9 @@ class VOLDOR_SLAM:
         self.w = int(flow_example.shape[1]*resize)
         
         for fn in flow_fn_list:
-            while len(self.flows) - self.fid_cur > n_cache:
-                time.sleep(0.01)
+            with self._pipeline_cv:
+                while len(self.flows) - self.fid_cur > n_cache:
+                    self._pipeline_cv.wait(timeout=0.01)
 
             flow = load_flow(os.path.join(flow_path, fn))
             if flow.shape[0] != self.h or flow.shape[1] != self.w:
@@ -274,13 +293,17 @@ class VOLDOR_SLAM:
                 flow[...,0] *= flow_rescale[0]
                 flow[...,1] *= flow_rescale[1]
             self.flows.append(flow)
-            self.flow_loader_pt += 1
+            with self._pipeline_cv:
+                self.flow_loader_pt += 1
+                self._pipeline_cv.notify_all()
             
     def image_loader(self, image_path, n_cache=100, range=(0,0)):
         if self.h==0 or self.w==0:
             raise 'Need start optical flow loader first.'
 
-        self.image_loader_pt = 0
+        with self._pipeline_cv:
+            self.image_loader_pt = 0
+            self._pipeline_cv.notify_all()
 
         image_fn_list = sorted(os.listdir(image_path))
         if range!=(0,0):
@@ -288,8 +311,9 @@ class VOLDOR_SLAM:
         print(f'{len(image_fn_list)} images loaded')
         
         for fn in image_fn_list:
-            while len(self.images_grayf) - self.fid_cur > n_cache or self.flow_loader_pt <= 0:
-                time.sleep(0.01)
+            with self._pipeline_cv:
+                while len(self.images_grayf) - self.fid_cur > n_cache or self.flow_loader_pt <= 0:
+                    self._pipeline_cv.wait(timeout=0.01)
 
             img = cv2.imread(os.path.join(image_path, fn), cv2.IMREAD_COLOR)
             print(os.path.join(image_path, fn))
@@ -302,13 +326,17 @@ class VOLDOR_SLAM:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             img = img.astype(np.float32) / 255.0
             self.images_grayf.append(img)
-            self.image_loader_pt += 1
+            with self._pipeline_cv:
+                self.image_loader_pt += 1
+                self._pipeline_cv.notify_all()
 
     def disp_loader(self, disp_path, n_cache=100, range=(0,0)):
         if self.h==0 or self.w==0:
             raise 'Need start optical flow loader first.'
             
-        self.disp_loader_pt = 0
+        with self._pipeline_cv:
+            self.disp_loader_pt = 0
+            self._pipeline_cv.notify_all()
 
         disp_fn_list = sorted(os.listdir(disp_path))
         if range!=(0,0):
@@ -316,8 +344,9 @@ class VOLDOR_SLAM:
         print(f'{len(disp_fn_list)} disparities loaded')
         
         for fn in disp_fn_list:
-            while len(self.disps) - self.fid_cur > n_cache or self.flow_loader_pt <= 0:
-                time.sleep(0.01)
+            with self._pipeline_cv:
+                while len(self.disps) - self.fid_cur > n_cache or self.flow_loader_pt <= 0:
+                    self._pipeline_cv.wait(timeout=0.01)
 
             if fn.endswith('.flo'):
                 disp = -load_flow(os.path.join(disp_path, fn))[...,0]
@@ -332,7 +361,9 @@ class VOLDOR_SLAM:
                 disp_rescale = self.w / disp.shape[1]
                 disp = cv2.resize(disp, (self.w, self.h)) * disp_rescale
             self.disps.append(disp)
-            self.disp_loader_pt += 1
+            with self._pipeline_cv:
+                self.disp_loader_pt += 1
+                self._pipeline_cv.notify_all()
 
     def save_poses(self, file_path='./output_pose.txt', format='KITTI'):
         with open(file_path, 'w') as f:
@@ -438,7 +469,12 @@ class VOLDOR_SLAM:
     def _record_vo_profile(
         self, total_s, loader_wait_s, kernel_s, advanced_frames,
         pose_sampling_ms=0.0, pose_p3p_ms=0.0, pose_meanshift_ms=0.0, pose_gu_fit_ms=0.0,
-        pose_calls=0, pose_gu_fit_calls=0):
+        pose_calls=0, pose_gu_fit_calls=0,
+        depth_cache_upload_ms=0.0, depth_fb_smooth_ms=0.0,
+        depth_init_cost_ms=0.0, depth_rand_prop_ms=0.0,
+        depth_global_prop_ms=0.0, depth_local_prop_ms=0.0,
+        depth_update_rigidness_ms=0.0, depth_copy_back_ms=0.0,
+        depth_calls=0):
         if advanced_frames <= 0:
             return
         self.vo_prof_total_s += total_s
@@ -450,6 +486,15 @@ class VOLDOR_SLAM:
         self.vo_prof_pose_gu_fit_ms += pose_gu_fit_ms
         self.vo_prof_pose_calls += pose_calls
         self.vo_prof_pose_gu_fit_calls += pose_gu_fit_calls
+        self.vo_prof_depth_cache_upload_ms += depth_cache_upload_ms
+        self.vo_prof_depth_fb_smooth_ms += depth_fb_smooth_ms
+        self.vo_prof_depth_init_cost_ms += depth_init_cost_ms
+        self.vo_prof_depth_rand_prop_ms += depth_rand_prop_ms
+        self.vo_prof_depth_global_prop_ms += depth_global_prop_ms
+        self.vo_prof_depth_local_prop_ms += depth_local_prop_ms
+        self.vo_prof_depth_update_rigidness_ms += depth_update_rigidness_ms
+        self.vo_prof_depth_copy_back_ms += depth_copy_back_ms
+        self.vo_prof_depth_calls += depth_calls
         self.vo_prof_calls += 1
         self.vo_prof_frames += advanced_frames
 
@@ -464,6 +509,15 @@ class VOLDOR_SLAM:
         pose_gu_fit_ms = 0.0
         pose_calls = 0
         pose_gu_fit_calls = 0
+        depth_cache_upload_ms = 0.0
+        depth_fb_smooth_ms = 0.0
+        depth_init_cost_ms = 0.0
+        depth_rand_prop_ms = 0.0
+        depth_global_prop_ms = 0.0
+        depth_local_prop_ms = 0.0
+        depth_update_rigidness_ms = 0.0
+        depth_copy_back_ms = 0.0
+        depth_calls = 0
 
         # a read lock will work since the 'write' of VO is 'append' that does not change existing map
         with self._map_lock.r_locked():
@@ -518,6 +572,15 @@ class VOLDOR_SLAM:
             pose_gu_fit_ms += float(vo_ret.get('gu_fit_ms_total', 0.0))
             pose_calls += int(vo_ret.get('pose_opt_timed_calls', 0))
             pose_gu_fit_calls += int(vo_ret.get('pose_opt_gu_fit_calls', 0))
+            depth_cache_upload_ms += float(vo_ret.get('depth_cache_upload_ms_total', 0.0))
+            depth_fb_smooth_ms += float(vo_ret.get('depth_fb_smooth_ms_total', 0.0))
+            depth_init_cost_ms += float(vo_ret.get('depth_init_cost_ms_total', 0.0))
+            depth_rand_prop_ms += float(vo_ret.get('depth_rand_prop_ms_total', 0.0))
+            depth_global_prop_ms += float(vo_ret.get('depth_global_prop_ms_total', 0.0))
+            depth_local_prop_ms += float(vo_ret.get('depth_local_prop_ms_total', 0.0))
+            depth_update_rigidness_ms += float(vo_ret.get('depth_update_rigidness_ms_total', 0.0))
+            depth_copy_back_ms += float(vo_ret.get('depth_copy_back_ms_total', 0.0))
+            depth_calls += int(vo_ret.get('depth_opt_timed_calls', 0))
 
             
             # if vo failed
@@ -530,6 +593,8 @@ class VOLDOR_SLAM:
                 self.fid_cur_tmpkf = -1
                 self.fid_cur_spakf = -1
                 self.fid_cur = self.fid_cur + 1
+                with self._pipeline_cv:
+                    self._pipeline_cv.notify_all()
                 advanced_frames = 1
                 
             else:
@@ -598,6 +663,8 @@ class VOLDOR_SLAM:
                 # set temporal kf to current frame, move fid_cur pt
                 self.fid_cur_tmpkf = self.fid_cur
                 self.fid_cur = self.fid_cur + vo_step
+                with self._pipeline_cv:
+                    self._pipeline_cv.notify_all()
                 advanced_frames = vo_step
 
         self._record_vo_profile(
@@ -611,6 +678,15 @@ class VOLDOR_SLAM:
             pose_gu_fit_ms=pose_gu_fit_ms,
             pose_calls=pose_calls,
             pose_gu_fit_calls=pose_gu_fit_calls,
+            depth_cache_upload_ms=depth_cache_upload_ms,
+            depth_fb_smooth_ms=depth_fb_smooth_ms,
+            depth_init_cost_ms=depth_init_cost_ms,
+            depth_rand_prop_ms=depth_rand_prop_ms,
+            depth_global_prop_ms=depth_global_prop_ms,
+            depth_local_prop_ms=depth_local_prop_ms,
+            depth_update_rigidness_ms=depth_update_rigidness_ms,
+            depth_copy_back_ms=depth_copy_back_ms,
+            depth_calls=depth_calls,
         )
         return True
 
@@ -819,6 +895,16 @@ class VOLDOR_SLAM:
                 print(f'  meanshift={self.vo_prof_pose_meanshift_ms / self.vo_prof_pose_calls:.3f} ms/run')
                 if self.vo_prof_pose_gu_fit_calls > 0:
                     print(f'  gu_fit={self.vo_prof_pose_gu_fit_ms / self.vo_prof_pose_gu_fit_calls:.3f} ms/run')
+            if self.vo_prof_depth_calls > 0:
+                print('avg_optimize_depth:')
+                print(f'  cache_upload={self.vo_prof_depth_cache_upload_ms / self.vo_prof_depth_calls:.3f} ms/run')
+                print(f'  fb_smooth={self.vo_prof_depth_fb_smooth_ms / self.vo_prof_depth_calls:.3f} ms/run')
+                print(f'  init_cost={self.vo_prof_depth_init_cost_ms / self.vo_prof_depth_calls:.3f} ms/run')
+                print(f'  rand_prop={self.vo_prof_depth_rand_prop_ms / self.vo_prof_depth_calls:.3f} ms/run')
+                print(f'  global_prop={self.vo_prof_depth_global_prop_ms / self.vo_prof_depth_calls:.3f} ms/run')
+                print(f'  local_prop={self.vo_prof_depth_local_prop_ms / self.vo_prof_depth_calls:.3f} ms/run')
+                print(f'  update_rigidness={self.vo_prof_depth_update_rigidness_ms / self.vo_prof_depth_calls:.3f} ms/run')
+                print(f'  copy_back={self.vo_prof_depth_copy_back_ms / self.vo_prof_depth_calls:.3f} ms/run')
 
 
     def mapping_thread(self):

@@ -8,6 +8,22 @@
 
 //TODO: add const...
 
+struct DepthOptimizeTiming {
+	float cache_upload_ms = 0.0f;
+	float fb_smooth_ms = 0.0f;
+	float init_cost_ms = 0.0f;
+	float rand_prop_ms = 0.0f;
+	float global_prop_ms = 0.0f;
+	float local_prop_ms = 0.0f;
+	float update_rigidness_ms = 0.0f;
+	float copy_back_ms = 0.0f;
+
+	float total_ms() const {
+		return cache_upload_ms + fb_smooth_ms + init_cost_ms + rand_prop_ms +
+			global_prop_ms + local_prop_ms + update_rigidness_ms + copy_back_ms;
+	}
+};
+
 DLL_EXPORT int meanshift_gpu(float* h_space, float kernel_var,
 	float* h_io_mean, float* h_o_confidence, int* used_iters,
 	bool use_external_init_mean, int N, int dims,
@@ -70,7 +86,8 @@ DLL_EXPORT int optimize_depth_gpu(
 	float lambda, float omega, float disp_delta, float delta,
 	bool fb_smooth, float s0_ems_prob, float no_change_prob,
 	float range_factor,
-	bool update_rigidness_only);
+	bool update_rigidness_only,
+	DepthOptimizeTiming* timing = nullptr);
 
 DLL_EXPORT int align_frame_init_gpu(
 	float* h_images[],

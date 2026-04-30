@@ -13,8 +13,13 @@ int py_voldor_wrapper(
 	int& n_registered, float* poses_pt, float* poses_covar_pt, float* depth_pt, float* depth_conf_pt,
 	float& sampling_collection_ms_total, float& p3p_computing_ms_total,
 	float& meanshift_ms_total, float& gu_fit_ms_total,
+	float& depth_cache_upload_ms_total, float& depth_fb_smooth_ms_total,
+	float& depth_init_cost_ms_total, float& depth_rand_prop_ms_total,
+	float& depth_global_prop_ms_total, float& depth_local_prop_ms_total,
+	float& depth_update_rigidness_ms_total, float& depth_copy_back_ms_total,
 	float& total_runtime_ms_per_frame,
-	int& pose_opt_timed_calls, int& pose_opt_gu_fit_calls) {
+	int& pose_opt_timed_calls, int& pose_opt_gu_fit_calls,
+	int& depth_opt_timed_calls) {
 
 	Config cfg;
 	std::istringstream iss(config_pt);
@@ -60,8 +65,17 @@ int py_voldor_wrapper(
 	p3p_computing_ms_total = voldor.pose_opt_timing_total.p3p_computing_ms;
 	meanshift_ms_total = voldor.pose_opt_timing_total.meanshift_ms;
 	gu_fit_ms_total = voldor.pose_opt_timing_total.gu_fit_ms;
+	depth_cache_upload_ms_total = voldor.depth_opt_timing_total.cache_upload_ms;
+	depth_fb_smooth_ms_total = voldor.depth_opt_timing_total.fb_smooth_ms;
+	depth_init_cost_ms_total = voldor.depth_opt_timing_total.init_cost_ms;
+	depth_rand_prop_ms_total = voldor.depth_opt_timing_total.rand_prop_ms;
+	depth_global_prop_ms_total = voldor.depth_opt_timing_total.global_prop_ms;
+	depth_local_prop_ms_total = voldor.depth_opt_timing_total.local_prop_ms;
+	depth_update_rigidness_ms_total = voldor.depth_opt_timing_total.update_rigidness_ms;
+	depth_copy_back_ms_total = voldor.depth_opt_timing_total.copy_back_ms;
 	pose_opt_timed_calls = voldor.pose_opt_timed_calls;
 	pose_opt_gu_fit_calls = voldor.pose_opt_gu_fit_calls;
+	depth_opt_timed_calls = voldor.depth_opt_timed_calls;
 	total_runtime_ms_per_frame = pose_opt_timed_calls > 0 ?
 		voldor.pose_opt_timing_total.total_ms() / pose_opt_timed_calls : 0.0f;
 

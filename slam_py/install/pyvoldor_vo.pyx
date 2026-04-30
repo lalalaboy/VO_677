@@ -12,8 +12,13 @@ cdef extern from "../../voldor/py_export.h":
         int& n_registered, float* poses, float* poses_covar, float* depth, float* depth_conf,
         float& sampling_collection_ms_total, float& p3p_computing_ms_total,
         float& meanshift_ms_total, float& gu_fit_ms_total,
+        float& depth_cache_upload_ms_total, float& depth_fb_smooth_ms_total,
+        float& depth_init_cost_ms_total, float& depth_rand_prop_ms_total,
+        float& depth_global_prop_ms_total, float& depth_local_prop_ms_total,
+        float& depth_update_rigidness_ms_total, float& depth_copy_back_ms_total,
         float& total_runtime_ms_per_frame,
-        int& pose_opt_timed_calls, int& pose_opt_gu_fit_calls)
+        int& pose_opt_timed_calls, int& pose_opt_gu_fit_calls,
+        int& depth_opt_timed_calls)
 
 def voldor(
     np.ndarray[float, ndim=4] flows not None,
@@ -55,9 +60,18 @@ def voldor(
     cdef float p3p_computing_ms_total = 0
     cdef float meanshift_ms_total = 0
     cdef float gu_fit_ms_total = 0
+    cdef float depth_cache_upload_ms_total = 0
+    cdef float depth_fb_smooth_ms_total = 0
+    cdef float depth_init_cost_ms_total = 0
+    cdef float depth_rand_prop_ms_total = 0
+    cdef float depth_global_prop_ms_total = 0
+    cdef float depth_local_prop_ms_total = 0
+    cdef float depth_update_rigidness_ms_total = 0
+    cdef float depth_copy_back_ms_total = 0
     cdef float total_runtime_ms_per_frame = 0
     cdef int pose_opt_timed_calls = 0
     cdef int pose_opt_gu_fit_calls = 0
+    cdef int depth_opt_timed_calls = 0
     py_voldor_wrapper(
                 &flows[0,0,0,0],
                 &disparity[0,0] if disparity is not None else NULL,
@@ -77,9 +91,18 @@ def voldor(
                 p3p_computing_ms_total,
                 meanshift_ms_total,
                 gu_fit_ms_total,
+                depth_cache_upload_ms_total,
+                depth_fb_smooth_ms_total,
+                depth_init_cost_ms_total,
+                depth_rand_prop_ms_total,
+                depth_global_prop_ms_total,
+                depth_local_prop_ms_total,
+                depth_update_rigidness_ms_total,
+                depth_copy_back_ms_total,
                 total_runtime_ms_per_frame,
                 pose_opt_timed_calls,
-                pose_opt_gu_fit_calls)
+                pose_opt_gu_fit_calls,
+                depth_opt_timed_calls)
 
     return {'n_registered': n_registered,
             'poses': poses[:n_registered],
@@ -90,6 +113,15 @@ def voldor(
             'p3p_computing_ms_total': p3p_computing_ms_total,
             'meanshift_ms_total': meanshift_ms_total,
             'gu_fit_ms_total': gu_fit_ms_total,
+            'depth_cache_upload_ms_total': depth_cache_upload_ms_total,
+            'depth_fb_smooth_ms_total': depth_fb_smooth_ms_total,
+            'depth_init_cost_ms_total': depth_init_cost_ms_total,
+            'depth_rand_prop_ms_total': depth_rand_prop_ms_total,
+            'depth_global_prop_ms_total': depth_global_prop_ms_total,
+            'depth_local_prop_ms_total': depth_local_prop_ms_total,
+            'depth_update_rigidness_ms_total': depth_update_rigidness_ms_total,
+            'depth_copy_back_ms_total': depth_copy_back_ms_total,
             'total_runtime_ms_per_frame': total_runtime_ms_per_frame,
             'pose_opt_timed_calls': pose_opt_timed_calls,
-            'pose_opt_gu_fit_calls': pose_opt_gu_fit_calls}
+            'pose_opt_gu_fit_calls': pose_opt_gu_fit_calls,
+            'depth_opt_timed_calls': depth_opt_timed_calls}

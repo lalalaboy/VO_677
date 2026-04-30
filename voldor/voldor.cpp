@@ -17,6 +17,8 @@ void VOLDOR::init(vector<Mat> _flows,
 	pose_opt_timing_total = PoseOptimizeTiming();
 	pose_opt_timed_calls = 0;
 	pose_opt_gu_fit_calls = 0;
+	depth_opt_timing_total = DepthOptimizeTiming();
+	depth_opt_timed_calls = 0;
 
 	// we assume flow, disparity and camera parameters need apply resize
 	// while depth_prior and their poses are pre-resized since they are usually previous VOLDOR result
@@ -259,15 +261,24 @@ void VOLDOR::optimize_depth(OPTIMIZE_DEPTH_FLAG flag) {
 			h_dp_ts[i] = (float*)depth_prior_poses[i].t.data;
 		}
 	}
+	const bool need_depth_prior_conf_host =
+		cfg.debug || cfg.save_everything || !cfg.exclusive_gpu_context ||
+		(iters_remain == 0) || (n_flows == 0);
+	const bool need_rigidness_host =
+		cfg.debug || cfg.save_everything || !cfg.exclusive_gpu_context ||
+		(iters_remain == 0) || (n_flows == 0);
+	float** h_o_depth_prior_confs = need_depth_prior_conf_host ? h_depth_prior_confs : NULL;
+	float** h_o_rigidnesses = need_rigidness_host ? h_rigidnesses : NULL;
 	if (!cfg.exclusive_gpu_context || iters_cur == 0 || iters_cur == 1) {
+		DepthOptimizeTiming depth_timing;
 		// gpu cache need update
 		// iters_cur==0 is the call for fusing depth priors
 		// iters_cur==1 is the first call for fusing everything
 		optimize_depth_gpu(
 			h_flows,
-			h_rigidnesses, h_rigidnesses,
+			h_rigidnesses, h_o_rigidnesses,
 			h_depth_priors, h_depth_prior_pconfs,
-			h_depth_prior_confs, h_depth_prior_confs,
+			h_depth_prior_confs, h_o_depth_prior_confs,
 			(float*)depth.data, (float*)depth.data,
 			(float*)cams[0].K.data,
 			h_Rs, h_ts,
@@ -278,16 +289,27 @@ void VOLDOR::optimize_depth(OPTIMIZE_DEPTH_FLAG flag) {
 			cfg.lambda, cfg.omega, has_disparity ? cfg.disp_delta : -1, cfg.delta,
 			cfg.fb_smooth, cfg.fb_emm, cfg.fb_no_change_prob,
 			cfg.depth_range_factor,
-			flag == OD_UPDATE_RIGIDNESS_ONLY);
+			flag == OD_UPDATE_RIGIDNESS_ONLY,
+			&depth_timing);
+		depth_opt_timing_total.cache_upload_ms += depth_timing.cache_upload_ms;
+		depth_opt_timing_total.fb_smooth_ms += depth_timing.fb_smooth_ms;
+		depth_opt_timing_total.init_cost_ms += depth_timing.init_cost_ms;
+		depth_opt_timing_total.rand_prop_ms += depth_timing.rand_prop_ms;
+		depth_opt_timing_total.global_prop_ms += depth_timing.global_prop_ms;
+		depth_opt_timing_total.local_prop_ms += depth_timing.local_prop_ms;
+		depth_opt_timing_total.update_rigidness_ms += depth_timing.update_rigidness_ms;
+		depth_opt_timing_total.copy_back_ms += depth_timing.copy_back_ms;
+		depth_opt_timed_calls++;
 	}
 	else {
+		DepthOptimizeTiming depth_timing;
 		// update minimal caches
 		// some inputs will need add back if latter changed outside GPU
 		optimize_depth_gpu(
 			NULL,
-			NULL, h_rigidnesses,
+			NULL, h_o_rigidnesses,
 			NULL, NULL,
-			NULL, h_depth_prior_confs,
+			NULL, h_o_depth_prior_confs,
 			NULL, (float*)depth.data,
 			NULL,
 			h_Rs, h_ts,
@@ -298,7 +320,17 @@ void VOLDOR::optimize_depth(OPTIMIZE_DEPTH_FLAG flag) {
 			cfg.lambda, cfg.omega, has_disparity ? cfg.disp_delta : -1, cfg.delta,
 			cfg.fb_smooth, cfg.fb_emm, cfg.fb_no_change_prob,
 			cfg.depth_range_factor,
-			flag == OD_UPDATE_RIGIDNESS_ONLY);
+			flag == OD_UPDATE_RIGIDNESS_ONLY,
+			&depth_timing);
+		depth_opt_timing_total.cache_upload_ms += depth_timing.cache_upload_ms;
+		depth_opt_timing_total.fb_smooth_ms += depth_timing.fb_smooth_ms;
+		depth_opt_timing_total.init_cost_ms += depth_timing.init_cost_ms;
+		depth_opt_timing_total.rand_prop_ms += depth_timing.rand_prop_ms;
+		depth_opt_timing_total.global_prop_ms += depth_timing.global_prop_ms;
+		depth_opt_timing_total.local_prop_ms += depth_timing.local_prop_ms;
+		depth_opt_timing_total.update_rigidness_ms += depth_timing.update_rigidness_ms;
+		depth_opt_timing_total.copy_back_ms += depth_timing.copy_back_ms;
+		depth_opt_timed_calls++;
 	}
 
 
