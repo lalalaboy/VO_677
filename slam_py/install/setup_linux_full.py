@@ -7,8 +7,8 @@ import numpy
 import subprocess
 import shutil
 
-# RTX 5000 Ada -> SM 84
-nvcc_machine_code = '-gencode arch=compute_86,code=sm_86 -gencode arch=compute_86,code=compute_86'
+# Match original VOLDOR build behavior: let nvcc choose its default target.
+nvcc_machine_code = ''
 
 gpu_sources_cpp = ' '.join(glob('../../gpu-kernels/*.cpp'))
 gpu_sources_cu = ' '.join(glob('../../gpu-kernels/*.cu'))

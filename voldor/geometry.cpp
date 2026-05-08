@@ -18,6 +18,7 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 	Point3f* pts3 = NULL; // pts3 is related to frame(active_idx-1).
 	float* d_pts2 = NULL;
 	float* d_pts3 = NULL;
+	float* d_poses_pool = NULL;
 							// Thus, the relative pose describe frame(active_idx-1)--[R|Rt]-->frame(active_idx).
 
 	float** h_flows = new float*[n_flows];
@@ -76,8 +77,8 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 	}
 
 
-	// GPU compaction returns 0 when fewer than 4 valid correspondences are available.
-	if (n_points <= 0) {
+	// check if able to have at least one pose
+	if (n_points < 4) {
 		if (pts2) delete[] pts2;
 		if (pts3) delete[] pts3;
 		return 0;
@@ -85,6 +86,8 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 
 	if (timing)
 		timing->sampling_collection_ms = chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6;
+	if (!cfg.silent)
+		cout << "sampling collection time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
 	time_stamp = chrono::high_resolution_clock::now();
 
 
@@ -139,29 +142,14 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		}
 	}
 	else {
-		float* ret_Rs = new float[cfg.n_poses_to_sample * 3];
-		float* ret_ts = new float[cfg.n_poses_to_sample * 3];
-
 		if (cfg.lambdatwist) {
-			solve_batch_p3p_lambdatwist_gpu_device(d_pts3, d_pts2, ret_Rs, ret_ts, (float*)cams[active_idx].K.data, n_points, cfg.n_poses_to_sample);
+			solve_batch_p3p_lambdatwist_gpu_device_compact_device(d_pts3, d_pts2, &d_poses_pool, &poses_pool_used,
+				(float*)cams[active_idx].K.data, n_points, cfg.n_poses_to_sample);
 		}
 		else {
-			solve_batch_p3p_ap3p_gpu_device(d_pts3, d_pts2, ret_Rs, ret_ts, (float*)cams[active_idx].K.data, n_points, cfg.n_poses_to_sample);
+			solve_batch_p3p_ap3p_gpu_device_compact_device(d_pts3, d_pts2, &d_poses_pool, &poses_pool_used,
+				(float*)cams[active_idx].K.data, n_points, cfg.n_poses_to_sample);
 		}
-
-		for (int i = 0; i < cfg.n_poses_to_sample; i++) {
-			if (isfinite(ret_Rs[i * 3 + 0] + ret_Rs[i * 3 + 1] + ret_Rs[i * 3 + 2] + ret_ts[i * 3 + 0] + ret_ts[i * 3 + 1] + ret_ts[i * 3 + 2])) {
-				// This is a solved bug, atan2 is more accurate than acos2 in rodrigues implementation
-				// Due to GPU accuracy issue, GPU p3p sometimes gives pure zero rotation, this will cause incorrect covar in rg_refine process
-				//if (rg_refine && (ret_Rs[i * 3 + 0] == 0 && ret_Rs[i * 3 + 1] == 0 && ret_Rs[i * 3 + 2] == 0))
-					//continue;
-				poses_pool.at<Vec3f>(poses_pool_used, 0) = Vec3f(ret_Rs[i * 3 + 0], ret_Rs[i * 3 + 1], ret_Rs[i * 3 + 2]);
-				poses_pool.at<Vec3f>(poses_pool_used++, 1) = Vec3f(ret_ts[i * 3 + 0], ret_ts[i * 3 + 1], ret_ts[i * 3 + 2]);
-			}
-		}
-
-		delete[] ret_Rs;
-		delete[] ret_ts;
 	}
 
 	if (pts2) delete[] pts2;
@@ -169,6 +157,8 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 
 	if (timing)
 		timing->p3p_computing_ms = chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6;
+	if (!cfg.silent)
+		cout << "p3p computing time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
 	time_stamp = chrono::high_resolution_clock::now();
 
 	if (poses_pool_used == 0)
@@ -184,14 +174,24 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 	// scale and do meanshift
 	time_stamp = chrono::high_resolution_clock::now();
 
-	poses_pool.colRange(0, 3) *= cfg.meanshift_rvec_scale;
 	pose_opm.colRange(0, 3) *= cfg.meanshift_rvec_scale;
-	meanshift_gpu((float*)poses_pool.data, cfg.meanshift_kernel_var,
-		(float*)pose_opm.data, &cams[active_idx].pose_density, &cams[active_idx].last_used_ms_iters, successive_pose,
-		poses_pool_used, 6, cfg.meanshift_epsilon, cfg.meanshift_max_iters, cfg.meanshift_max_init_trials, cfg.meanshift_good_init_confidence);
+	if (cfg.cpu_p3p) {
+		poses_pool.colRange(0, 3) *= cfg.meanshift_rvec_scale;
+		meanshift_gpu((float*)poses_pool.data, cfg.meanshift_kernel_var,
+			(float*)pose_opm.data, &cams[active_idx].pose_density, &cams[active_idx].last_used_ms_iters, successive_pose,
+			poses_pool_used, 6, cfg.meanshift_epsilon, cfg.meanshift_max_iters, cfg.meanshift_max_init_trials, cfg.meanshift_good_init_confidence);
+	}
+	else {
+		scale_pose_pool_rvecs_gpu(d_poses_pool, cfg.meanshift_rvec_scale, poses_pool_used);
+		meanshift_gpu_device(d_poses_pool, cfg.meanshift_kernel_var,
+			(float*)pose_opm.data, &cams[active_idx].pose_density, &cams[active_idx].last_used_ms_iters, successive_pose,
+			poses_pool_used, 6, cfg.meanshift_epsilon, cfg.meanshift_max_iters, cfg.meanshift_max_init_trials, cfg.meanshift_good_init_confidence);
+	}
 
 	if (timing)
 		timing->meanshift_ms = chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6;
+	if (!cfg.silent)
+		cout << "meanshift time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
 
 
 	if (rg_refine) {
@@ -203,7 +203,16 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 
 		cams[active_idx].pose_covar *= (cfg.rg_pose_scaling* cfg.rg_pose_scaling);
 		pose_opm *= cfg.rg_pose_scaling;
-		poses_pool *= cfg.rg_pose_scaling;
+		int fit_rg_ret = 0;
+		if (cfg.cpu_p3p) {
+			poses_pool *= cfg.rg_pose_scaling;
+			fit_rg_ret = fit_robust_gaussian((float*)poses_pool.data, (float*)pose_opm.data, (float*)cams[active_idx].pose_covar.data,
+				cfg.rg_trunc_sigma, cfg.rg_covar_reg_lambda, &cams[active_idx].pose_density, &cams[active_idx].last_used_gu_iters, poses_pool_used, 6, cfg.rg_epsilon, cfg.rg_max_iters);
+		}
+		else {
+			fit_rg_ret = fit_robust_gaussian_device_scaled(d_poses_pool, cfg.rg_pose_scaling, (float*)pose_opm.data, (float*)cams[active_idx].pose_covar.data,
+				cfg.rg_trunc_sigma, cfg.rg_covar_reg_lambda, &cams[active_idx].pose_density, &cams[active_idx].last_used_gu_iters, poses_pool_used, 6, cfg.rg_epsilon, cfg.rg_max_iters);
+		}
 
 		/*
 		int rvec_zero_count = 0;
@@ -213,9 +222,6 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		cout << "rvec_zero_count = " << rvec_zero_count << endl;
 		*/
 
-
-		int fit_rg_ret = fit_robust_gaussian((float*)poses_pool.data, (float*)pose_opm.data, (float*)cams[active_idx].pose_covar.data,
-			cfg.rg_trunc_sigma, cfg.rg_covar_reg_lambda, &cams[active_idx].pose_density, &cams[active_idx].last_used_gu_iters, poses_pool_used, 6, cfg.rg_epsilon, cfg.rg_max_iters);
 
 		if (fit_rg_ret == 0) { // cudaSuccess==0 
 			cams[active_idx].pose_covar /= (cfg.rg_pose_scaling*cfg.rg_pose_scaling);
@@ -236,8 +242,11 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		pose_opm /= cfg.rg_pose_scaling;
 		//poses_pool /= cfg.rg_pose_scaling; // this is not used later, no need scale back
 
+
 		if (timing)
 			timing->gu_fit_ms = chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6;
+		if (!cfg.silent)
+			cout << "gu fit time = " << chrono::duration_cast<std::chrono::nanoseconds>(chrono::high_resolution_clock::now() - time_stamp).count() / 1e6 << "ms." << endl;
 	}
 
 

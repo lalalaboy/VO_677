@@ -3,7 +3,7 @@
 DOCKER_BUILDKIT=1 docker build --ssh default=$HOME/.ssh/id_ed25519 -t gsvoldor:cuda11.4 .
 
 
-GPU_DEVICE=${GPU_DEVICE:-1}
+GPU_DEVICE=${GPU_DEVICE:-0}
 NO_VIEWER=${NO_VIEWER:-0}
 
 xhost +local:docker

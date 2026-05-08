@@ -261,14 +261,6 @@ void VOLDOR::optimize_depth(OPTIMIZE_DEPTH_FLAG flag) {
 			h_dp_ts[i] = (float*)depth_prior_poses[i].t.data;
 		}
 	}
-	const bool need_depth_prior_conf_host =
-		cfg.debug || cfg.save_everything || !cfg.exclusive_gpu_context ||
-		(iters_remain == 0) || (n_flows == 0);
-	const bool need_rigidness_host =
-		cfg.debug || cfg.save_everything || !cfg.exclusive_gpu_context ||
-		(iters_remain == 0) || (n_flows == 0);
-	float** h_o_depth_prior_confs = need_depth_prior_conf_host ? h_depth_prior_confs : NULL;
-	float** h_o_rigidnesses = need_rigidness_host ? h_rigidnesses : NULL;
 	if (!cfg.exclusive_gpu_context || iters_cur == 0 || iters_cur == 1) {
 		DepthOptimizeTiming depth_timing;
 		// gpu cache need update
@@ -276,9 +268,9 @@ void VOLDOR::optimize_depth(OPTIMIZE_DEPTH_FLAG flag) {
 		// iters_cur==1 is the first call for fusing everything
 		optimize_depth_gpu(
 			h_flows,
-			h_rigidnesses, h_o_rigidnesses,
+			h_rigidnesses, h_rigidnesses,
 			h_depth_priors, h_depth_prior_pconfs,
-			h_depth_prior_confs, h_o_depth_prior_confs,
+			h_depth_prior_confs, h_depth_prior_confs,
 			(float*)depth.data, (float*)depth.data,
 			(float*)cams[0].K.data,
 			h_Rs, h_ts,
@@ -307,9 +299,9 @@ void VOLDOR::optimize_depth(OPTIMIZE_DEPTH_FLAG flag) {
 		// some inputs will need add back if latter changed outside GPU
 		optimize_depth_gpu(
 			NULL,
-			NULL, h_o_rigidnesses,
+			NULL, h_rigidnesses,
 			NULL, NULL,
-			NULL, h_o_depth_prior_confs,
+			NULL, h_depth_prior_confs,
 			NULL, (float*)depth.data,
 			NULL,
 			h_Rs, h_ts,
@@ -340,6 +332,7 @@ void VOLDOR::optimize_depth(OPTIMIZE_DEPTH_FLAG flag) {
 	delete[] h_ts;
 
 	delete[] h_depth_priors;
+	delete[] h_depth_prior_pconfs;
 	delete[] h_depth_prior_confs;
 	delete[] h_dp_Rs;
 	delete[] h_dp_ts;

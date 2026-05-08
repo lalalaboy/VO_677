@@ -29,9 +29,29 @@ DLL_EXPORT int meanshift_gpu(float* h_space, float kernel_var,
 	bool use_external_init_mean, int N, int dims,
 	float epsilon = 1e-5f, int max_iters = 100,
 	int max_init_trials = 20, float good_init_confidence = 0.5f);
+DLL_EXPORT int meanshift_gpu_device(float* d_space, float kernel_var,
+	float* h_io_mean, float* h_o_confidence, int* used_iters,
+	bool use_external_init_mean, int N, int dims,
+	float epsilon = 1e-5f, int max_iters = 100,
+	int max_init_trials = 20, float good_init_confidence = 0.5f);
+DLL_EXPORT int scale_pose_pool_rvecs_gpu(float* d_poses, float scale, int N);
+DLL_EXPORT int scale_pose_pool_gpu(float* d_poses, float scale, int N);
+DLL_EXPORT int copy_pose_pool_from_device(float* h_o_poses, float* d_poses, int N);
 
 DLL_EXPORT int fit_robust_gaussian(
 	float* h_space, float* h_io_mean, float* h_io_covar,
+	float trunc_sigma, float covar_reg_lambda,
+	float* h_o_density, int* used_iters,
+	int N, int dims,
+	float epsilon, int max_iters);
+DLL_EXPORT int fit_robust_gaussian_device(
+	float* d_space, float* h_io_mean, float* h_io_covar,
+	float trunc_sigma, float covar_reg_lambda,
+	float* h_o_density, int* used_iters,
+	int N, int dims,
+	float epsilon, int max_iters);
+DLL_EXPORT int fit_robust_gaussian_device_scaled(
+	float* d_space, float space_scale, float* h_io_mean, float* h_io_covar,
 	float trunc_sigma, float covar_reg_lambda,
 	float* h_o_density, int* used_iters,
 	int N, int dims,
@@ -70,6 +90,18 @@ DLL_EXPORT int solve_batch_p3p_ap3p_gpu_device(float* d_p3s, float* d_p2s,
 	float* h_K, int N_pts, int N_poses);
 DLL_EXPORT int solve_batch_p3p_lambdatwist_gpu_device(float* d_p3s, float* d_p2s,
 	float* h_o_rvecs, float* h_o_tvecs,
+	float* h_K, int N_pts, int N_poses);
+DLL_EXPORT int solve_batch_p3p_ap3p_gpu_device_compact(float* d_p3s, float* d_p2s,
+	float* h_o_poses, int* h_o_n_poses,
+	float* h_K, int N_pts, int N_poses);
+DLL_EXPORT int solve_batch_p3p_lambdatwist_gpu_device_compact(float* d_p3s, float* d_p2s,
+	float* h_o_poses, int* h_o_n_poses,
+	float* h_K, int N_pts, int N_poses);
+DLL_EXPORT int solve_batch_p3p_ap3p_gpu_device_compact_device(float* d_p3s, float* d_p2s,
+	float** d_o_poses, int* h_o_n_poses,
+	float* h_K, int N_pts, int N_poses);
+DLL_EXPORT int solve_batch_p3p_lambdatwist_gpu_device_compact_device(float* d_p3s, float* d_p2s,
+	float** d_o_poses, int* h_o_n_poses,
 	float* h_K, int N_pts, int N_poses);
 
 DLL_EXPORT int optimize_depth_gpu(

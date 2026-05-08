@@ -34,33 +34,59 @@ __global__ static void compute_weighted_space(
 	}
 }
 
+__global__ static void scale_pose_rvecs(float* d_poses, float scale, int N) {
+	int idx = blockIdx.x*blockDim.x + threadIdx.x;
+	if (idx < N) {
+		d_poses[idx * 6 + 0] *= scale;
+		d_poses[idx * 6 + 1] *= scale;
+		d_poses[idx * 6 + 2] *= scale;
+	}
+}
 
-int meanshift_gpu(float* h_space, float kernel_var,
+__global__ static void scale_pose_values(float* d_poses, float scale, int N) {
+	int idx = blockIdx.x*blockDim.x + threadIdx.x;
+	if (idx < N * 6)
+		d_poses[idx] *= scale;
+}
+
+int scale_pose_pool_rvecs_gpu(float* d_poses, float scale, int N) {
+	if (N <= 0)
+		return cudaSuccess;
+	scale_pose_rvecs << <DIV_CEIL(N, N_THREADS), N_THREADS >> > (d_poses, scale, N);
+	gpuErrchk;
+	return cudaSuccess;
+}
+
+int scale_pose_pool_gpu(float* d_poses, float scale, int N) {
+	if (N <= 0)
+		return cudaSuccess;
+	scale_pose_values << <DIV_CEIL(N * 6, N_THREADS), N_THREADS >> > (d_poses, scale, N);
+	gpuErrchk;
+	return cudaSuccess;
+}
+
+int copy_pose_pool_from_device(float* h_o_poses, float* d_poses, int N) {
+	if (N <= 0)
+		return cudaSuccess;
+	cudaMemcpy(h_o_poses, d_poses, N * 6 * sizeof(float), cudaMemcpyDeviceToHost);
+	gpuErrchk;
+	return cudaSuccess;
+}
+
+
+int meanshift_gpu_device(float* d_space, float kernel_var,
 	float* h_io_mean, float* h_o_confidence, int* used_iters,
 	bool use_external_init_mean, int N, int dims,
 	float epsilon, int max_iters,
 	int max_init_trials, float good_init_confidence) {
 
-	static float* d_space = NULL;
 	static float* d_weight = NULL;
 	static float* d_weighted_space = NULL;
-	static int d_space_cap = 0; // in number of float entries
 	static int d_weight_cap = 0; // in number of float entries
 	static int d_weighted_space_cap = 0; // in number of float entries
 	static float* ht_mean = NULL; // host temp memory for mean. size=dims
 	static int ht_mean_cap = 0;
 	float ht_weight[1];
-
-	const int space_need = N * dims;
-	if (space_need > d_space_cap) {
-		if (d_space) cudaFree(d_space);
-		cudaMalloc((void**)&d_space, space_need * sizeof(float));
-		d_space_cap = space_need;
-	}
-
-	// copy space data
-	cudaMemcpy(d_space, h_space, N * dims * sizeof(float), cudaMemcpyHostToDevice);
-	gpuErrchk;
 
 	// allocate device buffer (weight map & weighted space map)
 	int N_reduce_sum_ext = 0;
@@ -95,7 +121,7 @@ int meanshift_gpu(float* h_space, float kernel_var,
 		for (int trial = 0; trial < max_init_trials; trial++) {
 			int idx_rand = (rand() % N);
 
-			cudaMemcpyToSymbol(c_mean, &h_space[idx_rand*dims], dims * sizeof(float));
+			cudaMemcpyToSymbol(c_mean, d_space + idx_rand*dims, dims * sizeof(float), 0, cudaMemcpyDeviceToDevice);
 			gpuErrchk;
 
 			// weight each sample
@@ -112,7 +138,7 @@ int meanshift_gpu(float* h_space, float kernel_var,
 			if (best_init_confidence > good_init_confidence*N)
 				break;
 		}
-		cudaMemcpyToSymbol(c_mean, &h_space[best_init_sample_idx*dims], dims * sizeof(float));
+		cudaMemcpyToSymbol(c_mean, d_space + best_init_sample_idx*dims, dims * sizeof(float), 0, cudaMemcpyDeviceToDevice);
 		gpuErrchk;
 	}
 
@@ -154,4 +180,28 @@ int meanshift_gpu(float* h_space, float kernel_var,
 	}
 
 	return cudaSuccess;
+}
+
+int meanshift_gpu(float* h_space, float kernel_var,
+	float* h_io_mean, float* h_o_confidence, int* used_iters,
+	bool use_external_init_mean, int N, int dims,
+	float epsilon, int max_iters,
+	int max_init_trials, float good_init_confidence) {
+
+	static float* d_space = NULL;
+	static int d_space_cap = 0; // in number of float entries
+
+	const int space_need = N * dims;
+	if (space_need > d_space_cap) {
+		if (d_space) cudaFree(d_space);
+		cudaMalloc((void**)&d_space, space_need * sizeof(float));
+		d_space_cap = space_need;
+	}
+
+	cudaMemcpy(d_space, h_space, N * dims * sizeof(float), cudaMemcpyHostToDevice);
+	gpuErrchk;
+
+	return meanshift_gpu_device(d_space, kernel_var,
+		h_io_mean, h_o_confidence, used_iters, use_external_init_mean,
+		N, dims, epsilon, max_iters, max_init_trials, good_init_confidence);
 }

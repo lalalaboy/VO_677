@@ -332,7 +332,7 @@ class VOLDOR_SLAM:
 
     def disp_loader(self, disp_path, n_cache=100, range=(0,0)):
         if self.h==0 or self.w==0:
-            raise 'Need start optical flow loader first.'
+            raise RuntimeError('Need start optical flow loader first.')
             
         with self._pipeline_cv:
             self.disp_loader_pt = 0
@@ -354,8 +354,13 @@ class VOLDOR_SLAM:
             elif fn.endswith('.png'):
                 disp = cv2.imread(os.path.join(disp_path, fn), cv2.IMREAD_UNCHANGED)
                 disp = disp.astype(np.float32) / 256.0
+            elif fn.endswith('.npy'):
+                disp = np.load(os.path.join(disp_path, fn))
+                if disp.ndim == 3:
+                    disp = disp[..., 0]
+                disp = np.ascontiguousarray(disp.astype(np.float32))
             else:
-                raise f'Unsupported disparity format {fn}'
+                raise RuntimeError(f'Unsupported disparity format {fn}')
 
             if disp.shape[0] != self.h or disp.shape[1] != self.w:
                 disp_rescale = self.w / disp.shape[1]

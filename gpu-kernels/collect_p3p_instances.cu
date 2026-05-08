@@ -66,11 +66,9 @@ __global__ static void compute_rigidnesses_sum() {
 	int x = blockDim.x*blockIdx.x + threadIdx.x;
 	int y = blockDim.y*blockIdx.y + threadIdx.y;
 	if (x < _w && y < _h) {
-		float sum = 0.f;
-#pragma unroll
+		_d_rigidnesses_sum.at(x, y) = 0;
 		for (int i = 0; i < _N; i++)
-			sum += _d_rigidnesses.at(x, y, i);
-		_d_rigidnesses_sum.at(x, y) = sum;
+			_d_rigidnesses_sum.at(x, y) += _d_rigidnesses.at(x, y, i);
 
 	}
 
@@ -324,32 +322,34 @@ int compact_p3p_instances(
 	const int grid_size = DIV_CEIL(total_pixels, block_size);
 	build_p3p_valid_flags << <grid_size, block_size >> > (d_compact_flags);
 	gpuErrchk;
+
 	thrust::exclusive_scan(
 		thrust::device_pointer_cast(d_compact_flags),
 		thrust::device_pointer_cast(d_compact_flags + total_pixels),
 		thrust::device_pointer_cast(d_compact_prefix));
+
 	scatter_p3p_map << <grid_size, block_size >> > (
 		max_output_points, d_compact_flags, d_compact_prefix, d_p2_compact, d_p3_compact);
 	gpuErrchk;
 
-	int n_points = 0;
 	int last_prefix = 0;
 	int last_flag = 0;
 	cudaMemcpy(&last_prefix, d_compact_prefix + total_pixels - 1, sizeof(int), cudaMemcpyDeviceToHost);
 	cudaMemcpy(&last_flag, d_compact_flags + total_pixels - 1, sizeof(int), cudaMemcpyDeviceToHost);
 	gpuErrchk;
-	n_points = last_prefix + last_flag;
-	n_points = n_points > max_output_points ? max_output_points : n_points;
-	const bool has_enough_points = n_points >= 4;
 
-	if (h_o_pts2 && has_enough_points)
+	int n_points = last_prefix + last_flag;
+	if (n_points > max_output_points)
+		n_points = max_output_points;
+
+	if (h_o_pts2 && n_points > 0)
 		cudaMemcpy(h_o_pts2, d_p2_compact, n_points * sizeof(float2), cudaMemcpyDeviceToHost);
-	if (h_o_pts3 && has_enough_points)
+	if (h_o_pts3 && n_points > 0)
 		cudaMemcpy(h_o_pts3, d_p3_compact, n_points * sizeof(float3), cudaMemcpyDeviceToHost);
 	gpuErrchk;
 
 	if (h_o_n_points)
-		*h_o_n_points = has_enough_points ? n_points : 0;
+		*h_o_n_points = n_points;
 
 	return cudaSuccess;
 }

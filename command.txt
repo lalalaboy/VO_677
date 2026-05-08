@@ -97,3 +97,9 @@ python demo.py \
   --save_depths "/home/junze/VO_677/data/result/depths"
 
 ＃bash command.txt
+
+GPU_DEVICE=0 ./scripts/docker_run.sh
+GPU_DEVICE=1 ./scripts/docker_run.sh
+GPU_DEVICE=0 ./scripts/docker_run.sh > run_gpu0.log 2>&1
+#hide log
+GPU_DEVICE=０ ./scripts/docker_run.sh > >(grep "demo throughput") 2>/dev/null

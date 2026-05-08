@@ -141,20 +141,13 @@ __device__ static float compute_pixel_cost(const int px, const int py, const flo
 	float cost_sum = 0;
 	float rigidness_weight_sum = 0;
 
-	// Reuse per-pixel ray terms across all frame/depth-prior evaluations.
-	const float ray_x = _K4_inv[0] * px + _K4_inv[1];
-	const float ray_y = _K4_inv[2] * py + _K4_inv[3];
-	const float ox0 = ray_x * depth;
-	const float oy0 = ray_y * depth;
-	const float oz0 = depth;
-
 	float ox, oy, oz;	// 3d point coordinate
 	float px1, py1;		// 2d projection of 3d point in frame f
 	float px2, py2;		// 2d projection of 3d point in frame f+1
 	float dx1, dy1;		// pixel displacement of depth flow
 	float2 d2;		// pixel displacement of observed flow
 
-	ox = ox0; oy = oy0; oz = oz0; // init 3d point coordinate with regard to frame 0
+	proj_p2_to_p3(px, py, depth, ox, oy, oz);	// init 3d point coordinate with regard to frame 0
 	px1 = px, py1 = py; // init 3d point projection in frame 0
 
 	for (int f = 0; f < _N; f++) {
@@ -177,7 +170,7 @@ __device__ static float compute_pixel_cost(const int px, const int py, const flo
 
 
 	for (int f = 0; f < _N_dp; f++) {
-		ox = ox0; oy = oy0; oz = oz0;	// init 3d point coordinate with regard to frame 0
+		proj_p2_to_p3(px, py, depth, ox, oy, oz);	// init 3d point coordinate with regard to frame 0
 		trans_p3_across_dp(ox, oy, oz, f);	// trans 3d point to dp frame f
 		proj_p3_to_p2(ox, oy, oz, px1, py1);	// get 2d projection of 3d point
 
@@ -189,11 +182,10 @@ __device__ static float compute_pixel_cost(const int px, const int py, const flo
 			float target_depth_conf = _d_depth_prior_confs.at_tex(px1, py1, f);
 
 			if (target_depth > 0) {
-				const float depth_prior_weight = target_depth_pconf * target_depth_conf;
 				if (_disp_delta > 0 && f == 0)
-					fun_depth_cost(oz, target_depth, _basefocal, depth_prior_weight * _disp_delta, cost_sum, rigidness_weight_sum, _omega, _abs_resize_factor);
+					fun_depth_cost(oz, target_depth, _basefocal, target_depth_pconf*target_depth_conf*_disp_delta, cost_sum, rigidness_weight_sum, _omega, _abs_resize_factor);
 				else
-					fun_depth_cost(oz, target_depth, _basefocal, depth_prior_weight * _delta, cost_sum, rigidness_weight_sum, _omega, _abs_resize_factor);
+					fun_depth_cost(oz, target_depth, _basefocal, target_depth_pconf*target_depth_conf*_delta, cost_sum, rigidness_weight_sum, _omega, _abs_resize_factor);
 			}
 		}
 	}
@@ -212,10 +204,6 @@ __device__ __inline__ static void replace_if_better_depth(int px, int py, float 
 		o_depth = depth_new;
 		io_cost = cost;
 	}
-}
-
-__device__ __forceinline__ static float* gmatf_row_ptr(GMatf& mat, const int y, const int d = 0) {
-	return (float*)(((char*)mat._dptr.ptr) + d * mat._dptr.ysize * mat._dptr.pitch + y * mat._dptr.pitch);
 }
 
 template<int propagate_direction>
@@ -246,128 +234,34 @@ __global__ static void optimize_depth_with_global_propagation_inplace(int step) 
 	}
 }
 
-// Fused global propagation along rows: L2R then R2L.
-__global__ static void optimize_depth_with_global_propagation_row_fused_inplace(int step) {
-	const int y = blockDim.y*blockIdx.y + threadIdx.y;
-	if (y < _h) {
-		float* depth_row = gmatf_row_ptr(_d_depth, y);
-		float* cost_row = gmatf_row_ptr(_d_cost_map, y);
-		for (int x = 1; x < _w; x += step) {
-			replace_if_better_depth(x, y,
-				depth_row[x - 1], depth_row[x], cost_row[x]);
-		}
-		for (int x = _w - 2; x >= 0; x -= step) {
-			replace_if_better_depth(x, y,
-				depth_row[x + 1], depth_row[x], cost_row[x]);
-		}
-	}
-}
-
-// Fused global propagation along cols: B2T then T2B (keep previous ordering).
-__global__ static void optimize_depth_with_global_propagation_col_fused_inplace(int step) {
-	const int x = blockDim.x*blockIdx.x + threadIdx.x;
-	if (x < _w) {
-		const int depth_pitch = _d_depth._dptr.pitch / sizeof(float);
-		const int cost_pitch = _d_cost_map._dptr.pitch / sizeof(float);
-		float* depth_base = (float*)_d_depth._dptr.ptr + x;
-		float* cost_base = (float*)_d_cost_map._dptr.ptr + x;
-		for (int y = _h - 2; y >= 0; y -= step) {
-			replace_if_better_depth(x, y,
-				depth_base[(y + 1) * depth_pitch], depth_base[y * depth_pitch], cost_base[y * cost_pitch]);
-		}
-		for (int y = 1; y < _h; y += step) {
-			replace_if_better_depth(x, y,
-				depth_base[(y - 1) * depth_pitch], depth_base[y * depth_pitch], cost_base[y * cost_pitch]);
-		}
-	}
-}
-
 template<int propagate_direction>
 __global__ static void optimize_depth_with_local_propagation_inplace(int width) {
 	const int tx = blockDim.x*blockIdx.x + threadIdx.x;
 	const int ty = blockDim.y*blockIdx.y + threadIdx.y;
 	if (tx < _w && ty < _h) {
 		if (propagate_direction == PROPAGATE_L2R) {
-			const int px = tx * width;
-			const int x_begin = max(1, px + 1);
-			const int x_end = min(_w, px + width);
-			for (int x = x_begin; x < x_end; x++)
+			int px = tx * width;
+			for (int x = max(1, px + 1); x < min(_w, px + width); x++)
 				replace_if_better_depth(x, ty,
 					_d_depth.at(x - 1, ty), _d_depth.at(x, ty), _d_cost_map.at(x, ty));
 		}
 		else if (propagate_direction == PROPAGATE_R2L) {
-			const int px = tx * width;
-			const int x_begin = min(_w - 2, px + width - 2);
-			const int x_end = max(0, px);
-			for (int x = x_begin; x >= x_end; x--)
+			int px = tx * width;
+			for (int x = min(_w - 2, px + width - 2); x >= max(0, px); x--)
 				replace_if_better_depth(x, ty,
 					_d_depth.at(x + 1, ty), _d_depth.at(x, ty), _d_cost_map.at(x, ty));
 		}
 		else if (propagate_direction == PROPAGATE_T2B) {
-			const int py = ty * width;
-			const int y_begin = max(1, py + 1);
-			const int y_end = min(_h, py + width);
-			for (int y = y_begin; y < y_end; y++)
+			int py = ty * width;
+			for (int y = max(1, py + 1); y < min(_h, py + width); y++)
 				replace_if_better_depth(tx, y,
 					_d_depth.at(tx, y - 1), _d_depth.at(tx, y), _d_cost_map.at(tx, y));
 		}
 		else if (propagate_direction == PROPAGATE_B2T) {
-			const int py = ty * width;
-			const int y_begin = min(_h - 2, py + width - 2);
-			const int y_end = max(0, py);
-			for (int y = y_begin; y >= y_end; y--)
+			int py = ty * width;
+			for (int y = min(_h - 2, py + width - 2); y >= max(0, py); y--)
 				replace_if_better_depth(tx, y,
 					_d_depth.at(tx, y + 1), _d_depth.at(tx, y), _d_cost_map.at(tx, y));
-		}
-	}
-}
-
-// Fused local propagation along rows: L2R then R2L.
-__global__ static void optimize_depth_with_local_propagation_row_fused_inplace(int width) {
-	const int tx = blockDim.x*blockIdx.x + threadIdx.x;
-	const int ty = blockDim.y*blockIdx.y + threadIdx.y;
-	if (tx < _w && ty < _h) {
-		float* depth_row = gmatf_row_ptr(_d_depth, ty);
-		float* cost_row = gmatf_row_ptr(_d_cost_map, ty);
-		const int px = tx * width;
-		const int x_l2r_begin = max(1, px + 1);
-		const int x_l2r_end = min(_w, px + width);
-		for (int x = x_l2r_begin; x < x_l2r_end; x++) {
-			replace_if_better_depth(x, ty,
-				depth_row[x - 1], depth_row[x], cost_row[x]);
-		}
-
-		const int x_r2l_begin = min(_w - 2, px + width - 2);
-		const int x_r2l_end = max(0, px);
-		for (int x = x_r2l_begin; x >= x_r2l_end; x--) {
-			replace_if_better_depth(x, ty,
-				depth_row[x + 1], depth_row[x], cost_row[x]);
-		}
-	}
-}
-
-// Fused local propagation along cols: B2T then T2B (keep previous ordering).
-__global__ static void optimize_depth_with_local_propagation_col_fused_inplace(int width) {
-	const int tx = blockDim.x*blockIdx.x + threadIdx.x;
-	const int ty = blockDim.y*blockIdx.y + threadIdx.y;
-	if (tx < _w && ty < _h) {
-		const int depth_pitch = _d_depth._dptr.pitch / sizeof(float);
-		const int cost_pitch = _d_cost_map._dptr.pitch / sizeof(float);
-		float* depth_base = (float*)_d_depth._dptr.ptr + tx;
-		float* cost_base = (float*)_d_cost_map._dptr.ptr + tx;
-		const int py = ty * width;
-		const int y_b2t_begin = min(_h - 2, py + width - 2);
-		const int y_b2t_end = max(0, py);
-		for (int y = y_b2t_begin; y >= y_b2t_end; y--) {
-			replace_if_better_depth(tx, y,
-				depth_base[(y + 1) * depth_pitch], depth_base[y * depth_pitch], cost_base[y * cost_pitch]);
-		}
-
-		const int y_t2b_begin = max(1, py + 1);
-		const int y_t2b_end = min(_h, py + width);
-		for (int y = y_t2b_begin; y < y_t2b_end; y++) {
-			replace_if_better_depth(tx, y,
-				depth_base[(y - 1) * depth_pitch], depth_base[y * depth_pitch], cost_base[y * cost_pitch]);
 		}
 	}
 }
@@ -414,9 +308,13 @@ int optimize_depth_gpu(
 	DepthOptimizeTiming* timing) {
 
 	DepthOptimizeTiming local_timing;
-	cudaEvent_t event_start, event_stop;
-	cudaEventCreate(&event_start);
-	cudaEventCreate(&event_stop);
+	static thread_local cudaEvent_t event_start = NULL, event_stop = NULL;
+	static thread_local bool timing_events_created = false;
+	if (!timing_events_created) {
+		cudaEventCreate(&event_start);
+		cudaEventCreate(&event_stop);
+		timing_events_created = true;
+	}
 	cudaEventRecord(event_start, 0);
 
 	// for pixel-wise op
@@ -607,8 +505,10 @@ int optimize_depth_gpu(
 		cudaEventRecord(event_start, 0);
 
 		if (global_prop_step > 0) {
-			optimize_depth_with_global_propagation_row_fused_inplace << <grid_size_row_chain, block_size_row_chain >> > (global_prop_step);
-			optimize_depth_with_global_propagation_col_fused_inplace << <grid_size_col_chain, block_size_col_chain >> > (global_prop_step);
+			optimize_depth_with_global_propagation_inplace <PROPAGATE_L2R> << <grid_size_row_chain, block_size_row_chain >> > (global_prop_step);
+			optimize_depth_with_global_propagation_inplace <PROPAGATE_B2T> << <grid_size_col_chain, block_size_col_chain >> > (global_prop_step);
+			optimize_depth_with_global_propagation_inplace <PROPAGATE_R2L> << <grid_size_row_chain, block_size_row_chain >> > (global_prop_step);
+			optimize_depth_with_global_propagation_inplace <PROPAGATE_T2B> << <grid_size_col_chain, block_size_col_chain >> > (global_prop_step);
 		}
 		cudaEventRecord(event_stop, 0);
 		cudaEventSynchronize(event_stop);
@@ -616,8 +516,10 @@ int optimize_depth_gpu(
 		cudaEventRecord(event_start, 0);
 
 		if (local_prop_width > 0) {
-			optimize_depth_with_local_propagation_row_fused_inplace << <grid_size_row_step, block_size_row_step >> > (local_prop_width);
-			optimize_depth_with_local_propagation_col_fused_inplace << <grid_size_col_step, block_size_col_step >> > (local_prop_width);
+			optimize_depth_with_local_propagation_inplace<PROPAGATE_L2R> << <grid_size_row_step, block_size_row_step >> > (local_prop_width);
+			optimize_depth_with_local_propagation_inplace<PROPAGATE_B2T> << <grid_size_col_step, block_size_col_step >> > (local_prop_width);
+			optimize_depth_with_local_propagation_inplace<PROPAGATE_R2L> << <grid_size_row_step, block_size_row_step >> > (local_prop_width);
+			optimize_depth_with_local_propagation_inplace<PROPAGATE_T2B> << <grid_size_col_step, block_size_col_step >> > (local_prop_width);
 		}
 		cudaEventRecord(event_stop, 0);
 		cudaEventSynchronize(event_stop);
@@ -657,8 +559,6 @@ int optimize_depth_gpu(
 
 	if (timing)
 		*timing = local_timing;
-	cudaEventDestroy(event_start);
-	cudaEventDestroy(event_stop);
 
 
 	// cudaFree(d_rand_states);
