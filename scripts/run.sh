@@ -9,9 +9,9 @@ if [ "$NO_VIEWER" = "1" ]; then
   VIEWER_ARGS="--no_viewer"
 fi
 exec python3.8 demo.py \
-  --disp_dir "../data/input/tartanair/Oldtown/P000/disp_left" \
-  --flow_dir "../data/input/tartanair/Oldtown/P000/flow_oldtown_p000" \
-  --img_dir "../data/input/tartanair/Oldtown/P000/image_left" \
+  --disp_dir "../data/input/tartanair/Oldtown/P001/disp_left" \
+  --flow_dir "../data/input/tartanair/Oldtown/P001/flow_oldtown_p001" \
+  --img_dir "../data/input/tartanair/Oldtown/P001/image_left" \
   --fx 320 \
   --fy 320 \
   --cx 320 \
@@ -22,8 +22,8 @@ exec python3.8 demo.py \
   --no_viewer \
   --mode stereo \
   ${VIEWER_ARGS} \
-  --save_poses "../data/result/tartanair/oldtown/P000/poses/poses_KITTI.txt" \
-  --save_depths "../data/result/tartanair/oldtown/P000/depths"
+  --save_poses "../data/result/tartanair/oldtown/P001/poses/poses_KITTI.txt" \
+  --save_depths "../data/result/tartanair/oldtown/P001/depths"
 
 #--enable_mapping \
 #--enable_loop_closure "./ORBvoc.bin" \

@@ -2,6 +2,10 @@
 #include "../gpu-kernels/gpu_kernels.h"
 #include "../lambdatwist/lambdatwist_p4p.h"
 
+#ifndef VOLDOR_USE_DEVICE_ORIGINAL_ORDER_GU_FIT
+#define VOLDOR_USE_DEVICE_ORIGINAL_ORDER_GU_FIT 1
+#endif
+
 int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 	Mat depth, vector<Camera>& cams,
 	int n_flows, int active_idx, bool successive_pose,
@@ -21,10 +25,18 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 	float* d_poses_pool = NULL;
 							// Thus, the relative pose describe frame(active_idx-1)--[R|Rt]-->frame(active_idx).
 
-	float** h_flows = new float*[n_flows];
-	float** h_rigidnesses = new float*[n_flows];
-	float** h_Rs = new float*[n_flows];
-	float** h_ts = new float*[n_flows];
+	thread_local vector<float*> h_flows_storage;
+	thread_local vector<float*> h_rigidnesses_storage;
+	thread_local vector<float*> h_Rs_storage;
+	thread_local vector<float*> h_ts_storage;
+	h_flows_storage.resize(n_flows);
+	h_rigidnesses_storage.resize(n_flows);
+	h_Rs_storage.resize(n_flows);
+	h_ts_storage.resize(n_flows);
+	float** h_flows = h_flows_storage.data();
+	float** h_rigidnesses = h_rigidnesses_storage.data();
+	float** h_Rs = h_Rs_storage.data();
+	float** h_ts = h_ts_storage.data();
 
 	for (int i = 0; i < n_flows; i++) {
 		h_flows[i] = (float*)flows[i].data;
@@ -57,14 +69,6 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 			cfg.rigidness_threshold, cfg.rigidness_sum_threshold,
 			cfg.pose_sample_min_depth, cfg.pose_sample_max_depth, cfg.max_trace_on_flow);
 	}
-
-
-
-	delete[] h_flows;
-	delete[] h_rigidnesses;
-	delete[] h_Rs;
-	delete[] h_ts;
-
 
 	int n_points = 0;
 	if (cfg.cpu_p3p) {
@@ -204,13 +208,15 @@ int optimize_camera_pose(vector<Mat> flows, vector<Mat> rigidnesses,
 		cams[active_idx].pose_covar *= (cfg.rg_pose_scaling* cfg.rg_pose_scaling);
 		pose_opm *= cfg.rg_pose_scaling;
 		int fit_rg_ret = 0;
-		if (cfg.cpu_p3p) {
-			poses_pool *= cfg.rg_pose_scaling;
-			fit_rg_ret = fit_robust_gaussian((float*)poses_pool.data, (float*)pose_opm.data, (float*)cams[active_idx].pose_covar.data,
+		if (!cfg.cpu_p3p && VOLDOR_USE_DEVICE_ORIGINAL_ORDER_GU_FIT) {
+			fit_rg_ret = fit_robust_gaussian_device_original_order_scaled(d_poses_pool, cfg.rg_pose_scaling, (float*)pose_opm.data, (float*)cams[active_idx].pose_covar.data,
 				cfg.rg_trunc_sigma, cfg.rg_covar_reg_lambda, &cams[active_idx].pose_density, &cams[active_idx].last_used_gu_iters, poses_pool_used, 6, cfg.rg_epsilon, cfg.rg_max_iters);
 		}
 		else {
-			fit_rg_ret = fit_robust_gaussian_device_scaled(d_poses_pool, cfg.rg_pose_scaling, (float*)pose_opm.data, (float*)cams[active_idx].pose_covar.data,
+			if (!cfg.cpu_p3p)
+				copy_pose_pool_from_device((float*)poses_pool.data, d_poses_pool, poses_pool_used);
+			poses_pool *= cfg.rg_pose_scaling;
+			fit_rg_ret = fit_robust_gaussian((float*)poses_pool.data, (float*)pose_opm.data, (float*)cams[active_idx].pose_covar.data,
 				cfg.rg_trunc_sigma, cfg.rg_covar_reg_lambda, &cams[active_idx].pose_density, &cams[active_idx].last_used_gu_iters, poses_pool_used, 6, cfg.rg_epsilon, cfg.rg_max_iters);
 		}
 

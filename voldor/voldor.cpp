@@ -226,10 +226,18 @@ void VOLDOR::optimize_depth(OPTIMIZE_DEPTH_FLAG flag) {
 	float** h_ts = NULL;
 
 	if (n_flows > 0 && flag != OD_ONLY_USE_DEPTH_PRIOR) {
-		h_flows = new float*[n_flows];
-		h_rigidnesses = new float*[n_flows];
-		h_Rs = new float*[n_flows];
-		h_ts = new float*[n_flows];
+		thread_local vector<float*> h_flows_storage;
+		thread_local vector<float*> h_rigidnesses_storage;
+		thread_local vector<float*> h_Rs_storage;
+		thread_local vector<float*> h_ts_storage;
+		h_flows_storage.resize(n_flows);
+		h_rigidnesses_storage.resize(n_flows);
+		h_Rs_storage.resize(n_flows);
+		h_ts_storage.resize(n_flows);
+		h_flows = h_flows_storage.data();
+		h_rigidnesses = h_rigidnesses_storage.data();
+		h_Rs = h_Rs_storage.data();
+		h_ts = h_ts_storage.data();
 
 		for (int i = 0; i < n_flows; i++) {
 			h_flows[i] = (float*)flows[i].data;
@@ -247,11 +255,21 @@ void VOLDOR::optimize_depth(OPTIMIZE_DEPTH_FLAG flag) {
 	float** h_dp_ts = NULL;
 
 	if (n_depth_priors > 0) {
-		h_depth_priors = new float*[n_depth_priors];
-		h_depth_prior_pconfs = new float*[n_depth_priors];
-		h_depth_prior_confs = new float*[n_depth_priors];
-		h_dp_Rs = new float*[n_depth_priors];
-		h_dp_ts = new float*[n_depth_priors];
+		thread_local vector<float*> h_depth_priors_storage;
+		thread_local vector<float*> h_depth_prior_pconfs_storage;
+		thread_local vector<float*> h_depth_prior_confs_storage;
+		thread_local vector<float*> h_dp_Rs_storage;
+		thread_local vector<float*> h_dp_ts_storage;
+		h_depth_priors_storage.resize(n_depth_priors);
+		h_depth_prior_pconfs_storage.resize(n_depth_priors);
+		h_depth_prior_confs_storage.resize(n_depth_priors);
+		h_dp_Rs_storage.resize(n_depth_priors);
+		h_dp_ts_storage.resize(n_depth_priors);
+		h_depth_priors = h_depth_priors_storage.data();
+		h_depth_prior_pconfs = h_depth_prior_pconfs_storage.data();
+		h_depth_prior_confs = h_depth_prior_confs_storage.data();
+		h_dp_Rs = h_dp_Rs_storage.data();
+		h_dp_ts = h_dp_ts_storage.data();
 
 		for (int i = 0; i < n_depth_priors; i++) {
 			h_depth_priors[i] = (float*)depth_priors[i].data;
@@ -325,17 +343,6 @@ void VOLDOR::optimize_depth(OPTIMIZE_DEPTH_FLAG flag) {
 		depth_opt_timed_calls++;
 	}
 
-
-	delete[] h_flows;
-	delete[] h_rigidnesses;
-	delete[] h_Rs;
-	delete[] h_ts;
-
-	delete[] h_depth_priors;
-	delete[] h_depth_prior_pconfs;
-	delete[] h_depth_prior_confs;
-	delete[] h_dp_Rs;
-	delete[] h_dp_ts;
 
 	if (!cfg.silent) {
 		toc("optimize_depth");

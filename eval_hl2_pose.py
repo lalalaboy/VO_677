@@ -12,8 +12,8 @@ import numpy as np
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-DEFAULT_GT_FILE = REPO_ROOT / "data/input/tartanair/Oldtown/P000/pose_left_gt_voldor_eval_3x4.txt"
-DEFAULT_VO_FILE = REPO_ROOT / "data/result/tartanair/oldtown/P000/poses/poses_KITTI.txt"
+DEFAULT_GT_FILE = REPO_ROOT / "data/input/tartanair/Oldtown/P001/pose_left_gt_voldor_eval_3x4.txt"
+DEFAULT_VO_FILE = REPO_ROOT / "data/result/tartanair/oldtown/P001/poses/poses_KITTI.txt"
 
 
 def load_kitti_poses(path: Path):

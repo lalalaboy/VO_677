@@ -3,6 +3,7 @@
 #include "gmat.h"
 #include <thrust/device_ptr.h>
 #include <thrust/scan.h>
+#include <string.h>
 
 
 #define RAND_SEED 233
@@ -38,8 +39,21 @@ static float2* d_p2_compact = NULL;
 static float3* d_p3_compact = NULL;
 static int* d_compact_flags = NULL;
 static int* d_compact_prefix = NULL;
+static int* d_compact_count = NULL;
 static int compact_output_capacity = 0;
 static int compact_scan_capacity = 0;
+
+#define UPDATE_SYMBOL_BYTES_IF_CHANGED(symbol, cache, valid, cache_bytes, src, bytes) do { \
+	const size_t _symbol_bytes = (bytes); \
+	if (!(valid) || (cache_bytes) < _symbol_bytes || memcmp((cache), (src), _symbol_bytes) != 0) { \
+		cudaError_t _symbol_err = cudaMemcpyToSymbol(symbol, (src), _symbol_bytes); \
+		if (_symbol_err != cudaSuccess) \
+			return _symbol_err; \
+		memcpy((cache), (src), _symbol_bytes); \
+		(valid) = true; \
+		(cache_bytes) = _symbol_bytes; \
+	} \
+} while (0)
 
 __device__ __inline__ static void proj_p2_to_p3(float px, float py, float depth, float& ox, float& oy, float& oz) {
 	ox = (_K4_inv[0] * px + _K4_inv[1]) * depth;
@@ -183,6 +197,16 @@ __global__ static void scatter_p3p_map(
 	}
 }
 
+__global__ static void compute_compact_count(
+	const int* d_valid_flags,
+	const int* d_prefix,
+	int* d_o_count,
+	int total_pixels,
+	int max_output_points) {
+	const int n_points = d_prefix[total_pixels - 1] + d_valid_flags[total_pixels - 1];
+	*d_o_count = min(n_points, max_output_points);
+}
+
 int collect_p3p_instances(
 	float* h_flows[], float* h_rigidnesses[],
 	float* h_depth,
@@ -210,27 +234,37 @@ int collect_p3p_instances(
 	// copy camera info to constant memory
 	// b_xxx stands for temp buffer
 	if (h_K) {
+		static bool K4_cache_valid = false;
+		static bool K4_inv_cache_valid = false;
+		static size_t K4_cache_bytes = 0;
+		static size_t K4_inv_cache_bytes = 0;
+		static float K4_cache[4];
+		static float K4_inv_cache[4];
 		float b_K4[4]{ h_K[0] , h_K[2], h_K[4],h_K[5] };
 		float b_K4_inv[4]{ 1.f / h_K[0], -h_K[2] / h_K[0], 1.f / h_K[4], -h_K[5] / h_K[4] };
-		cudaMemcpyToSymbol(_K4, b_K4, 4 * sizeof(float));
-		cudaMemcpyToSymbol(_K4_inv, b_K4_inv, 4 * sizeof(float));
+		UPDATE_SYMBOL_BYTES_IF_CHANGED(_K4, K4_cache, K4_cache_valid, K4_cache_bytes, b_K4, 4 * sizeof(float));
+		UPDATE_SYMBOL_BYTES_IF_CHANGED(_K4_inv, K4_inv_cache, K4_inv_cache_valid, K4_inv_cache_bytes, b_K4_inv, 4 * sizeof(float));
 	}
 
 
 	if (h_Rs) {
+		static bool Rs_cache_valid = false;
+		static size_t Rs_cache_bytes = 0;
+		static float Rs_cache[MAX_FRAMES][3][3];
 		float b_R[MAX_FRAMES][3][3];
 		for (int f = 0; f < N; f++)
 			memcpy(b_R[f], h_Rs[f], 9 * sizeof(float));
-		cudaMemcpyToSymbol(_Rs, b_R, N * 9 * sizeof(float));
-		gpuErrchk;
+		UPDATE_SYMBOL_BYTES_IF_CHANGED(_Rs, Rs_cache, Rs_cache_valid, Rs_cache_bytes, b_R, N * 9 * sizeof(float));
 	}
 
 	if (h_ts) {
+		static bool ts_cache_valid = false;
+		static size_t ts_cache_bytes = 0;
+		static float ts_cache[MAX_FRAMES][3];
 		float b_t[MAX_FRAMES][3];
 		for (int f = 0; f < N; f++)
 			memcpy(b_t[f], h_ts[f], 3 * sizeof(float));
-		cudaMemcpyToSymbol(_ts, b_t, N * 3 * sizeof(float));
-		gpuErrchk;
+		UPDATE_SYMBOL_BYTES_IF_CHANGED(_ts, ts_cache, ts_cache_valid, ts_cache_bytes, b_t, N * 3 * sizeof(float));
 	}
 
 	// copy flow to device
@@ -312,8 +346,10 @@ int compact_p3p_instances(
 	if (compact_scan_capacity < total_pixels) {
 		if (d_compact_flags) cudaFree(d_compact_flags);
 		if (d_compact_prefix) cudaFree(d_compact_prefix);
+		if (d_compact_count) cudaFree(d_compact_count);
 		cudaMalloc((void**)&d_compact_flags, total_pixels * sizeof(int));
 		cudaMalloc((void**)&d_compact_prefix, total_pixels * sizeof(int));
+		cudaMalloc((void**)&d_compact_count, sizeof(int));
 		compact_scan_capacity = total_pixels;
 	}
 	gpuErrchk;
@@ -332,15 +368,13 @@ int compact_p3p_instances(
 		max_output_points, d_compact_flags, d_compact_prefix, d_p2_compact, d_p3_compact);
 	gpuErrchk;
 
-	int last_prefix = 0;
-	int last_flag = 0;
-	cudaMemcpy(&last_prefix, d_compact_prefix + total_pixels - 1, sizeof(int), cudaMemcpyDeviceToHost);
-	cudaMemcpy(&last_flag, d_compact_flags + total_pixels - 1, sizeof(int), cudaMemcpyDeviceToHost);
+	compute_compact_count << <1, 1 >> > (
+		d_compact_flags, d_compact_prefix, d_compact_count, total_pixels, max_output_points);
 	gpuErrchk;
 
-	int n_points = last_prefix + last_flag;
-	if (n_points > max_output_points)
-		n_points = max_output_points;
+	int n_points = 0;
+	cudaMemcpy(&n_points, d_compact_count, sizeof(int), cudaMemcpyDeviceToHost);
+	gpuErrchk;
 
 	if (h_o_pts2 && n_points > 0)
 		cudaMemcpy(h_o_pts2, d_p2_compact, n_points * sizeof(float2), cudaMemcpyDeviceToHost);

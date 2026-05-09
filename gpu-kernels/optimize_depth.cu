@@ -3,6 +3,7 @@
 #include "residual_model.h"
 #include "fb_smooth.h"
 #include "gmat.h"
+#include <string.h>
 
 
 #define RAND_SEED 233
@@ -50,6 +51,18 @@ static GMatf d_depth_prior_confs;
 static GMatf d_depth;
 static GMatf d_rigidnesses;
 static GMatf d_cost_map;
+
+#define UPDATE_SYMBOL_BYTES_IF_CHANGED(symbol, cache, valid, cache_bytes, src, bytes) do { \
+	const size_t _symbol_bytes = (bytes); \
+	if (!(valid) || (cache_bytes) < _symbol_bytes || memcmp((cache), (src), _symbol_bytes) != 0) { \
+		cudaError_t _symbol_err = cudaMemcpyToSymbol(symbol, (src), _symbol_bytes); \
+		if (_symbol_err != cudaSuccess) \
+			return _symbol_err; \
+		memcpy((cache), (src), _symbol_bytes); \
+		(valid) = true; \
+		(cache_bytes) = _symbol_bytes; \
+	} \
+} while (0)
 
 __device__ __inline__ static void proj_p2_to_p3(float px, float py, float depth, float& ox, float& oy, float& oz) {
 	ox = (_K4_inv[0] * px + _K4_inv[1]) * depth;
@@ -354,10 +367,16 @@ int optimize_depth_gpu(
 	// copy camera info to constant memory
 	// b_xxx stands for temp buffer
 	if (h_K) {
+		static bool K4_cache_valid = false;
+		static bool K4_inv_cache_valid = false;
+		static size_t K4_cache_bytes = 0;
+		static size_t K4_inv_cache_bytes = 0;
+		static float K4_cache[4];
+		static float K4_inv_cache[4];
 		float b_K4[4]{ h_K[0] , h_K[2], h_K[4],h_K[5] };
 		float b_K4_inv[4]{ 1.f / h_K[0], -h_K[2] / h_K[0], 1.f / h_K[4], -h_K[5] / h_K[4] };
-		cudaMemcpyToSymbol(_K4, b_K4, 4 * sizeof(float));
-		cudaMemcpyToSymbol(_K4_inv, b_K4_inv, 4 * sizeof(float));
+		UPDATE_SYMBOL_BYTES_IF_CHANGED(_K4, K4_cache, K4_cache_valid, K4_cache_bytes, b_K4, 4 * sizeof(float));
+		UPDATE_SYMBOL_BYTES_IF_CHANGED(_K4_inv, K4_inv_cache, K4_inv_cache_valid, K4_inv_cache_bytes, b_K4_inv, 4 * sizeof(float));
 	}
 
 	//buffer
@@ -387,17 +406,21 @@ int optimize_depth_gpu(
 
 	if (N > 0) {
 		if (h_Rs) {
+			static bool Rs_cache_valid = false;
+			static size_t Rs_cache_bytes = 0;
+			static float Rs_cache[MAX_FRAMES][3][3];
 			for (int f = 0; f < N; f++)
 				memcpy(b_R[f], h_Rs[f], 9 * sizeof(float));
-			cudaMemcpyToSymbol(_Rs, b_R, N * 9 * sizeof(float));
-			gpuErrchk;
+			UPDATE_SYMBOL_BYTES_IF_CHANGED(_Rs, Rs_cache, Rs_cache_valid, Rs_cache_bytes, b_R, N * 9 * sizeof(float));
 		}
 
 		if (h_ts) {
+			static bool ts_cache_valid = false;
+			static size_t ts_cache_bytes = 0;
+			static float ts_cache[MAX_FRAMES][3];
 			for (int f = 0; f < N; f++)
 				memcpy(b_t[f], h_ts[f], 3 * sizeof(float));
-			cudaMemcpyToSymbol(_ts, b_t, N * 3 * sizeof(float));
-			gpuErrchk;
+			UPDATE_SYMBOL_BYTES_IF_CHANGED(_ts, ts_cache, ts_cache_valid, ts_cache_bytes, b_t, N * 3 * sizeof(float));
 		}
 
 		// copy flow to device
@@ -424,17 +447,21 @@ int optimize_depth_gpu(
 
 	if (N_dp > 0) {
 		if (h_dp_Rs) {
+			static bool dp_Rs_cache_valid = false;
+			static size_t dp_Rs_cache_bytes = 0;
+			static float dp_Rs_cache[MAX_DISP_FRAMES][3][3];
 			for (int f = 0; f < N_dp; f++)
 				memcpy(b_R[f], h_dp_Rs[f], 9 * sizeof(float));
-			cudaMemcpyToSymbol(_dp_Rs, b_R, N_dp * 9 * sizeof(float));
-			gpuErrchk;
+			UPDATE_SYMBOL_BYTES_IF_CHANGED(_dp_Rs, dp_Rs_cache, dp_Rs_cache_valid, dp_Rs_cache_bytes, b_R, N_dp * 9 * sizeof(float));
 		}
 
 		if (h_dp_ts) {
+			static bool dp_ts_cache_valid = false;
+			static size_t dp_ts_cache_bytes = 0;
+			static float dp_ts_cache[MAX_DISP_FRAMES][3];
 			for (int f = 0; f < N_dp; f++)
 				memcpy(b_t[f], h_dp_ts[f], 3 * sizeof(float));
-			cudaMemcpyToSymbol(_dp_ts, b_t, N_dp * 3 * sizeof(float));
-			gpuErrchk;
+			UPDATE_SYMBOL_BYTES_IF_CHANGED(_dp_ts, dp_ts_cache, dp_ts_cache_valid, dp_ts_cache_bytes, b_t, N_dp * 3 * sizeof(float));
 		}
 
 

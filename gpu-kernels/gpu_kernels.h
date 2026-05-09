@@ -44,13 +44,13 @@ DLL_EXPORT int fit_robust_gaussian(
 	float* h_o_density, int* used_iters,
 	int N, int dims,
 	float epsilon, int max_iters);
-DLL_EXPORT int fit_robust_gaussian_device(
+DLL_EXPORT int fit_robust_gaussian_device_original_order(
 	float* d_space, float* h_io_mean, float* h_io_covar,
 	float trunc_sigma, float covar_reg_lambda,
 	float* h_o_density, int* used_iters,
 	int N, int dims,
 	float epsilon, int max_iters);
-DLL_EXPORT int fit_robust_gaussian_device_scaled(
+DLL_EXPORT int fit_robust_gaussian_device_original_order_scaled(
 	float* d_space, float space_scale, float* h_io_mean, float* h_io_covar,
 	float trunc_sigma, float covar_reg_lambda,
 	float* h_o_density, int* used_iters,

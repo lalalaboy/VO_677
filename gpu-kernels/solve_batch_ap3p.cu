@@ -3,6 +3,7 @@
 #include "rodrigues.h"
 #include <thrust/device_ptr.h>
 #include <thrust/scan.h>
+#include <limits.h>
 
 #define N_THREADS 32
 
@@ -17,6 +18,19 @@ static int* d_pose_prefix_cache = NULL;
 static float* d_pose_compact_cache = NULL;
 static int pts_cap = 0;
 static int poses_cap = 0;
+
+static int grow_cache_capacity(int current_cap, int required) {
+	int next_cap = current_cap > 0 ? current_cap : 1;
+	while (next_cap < required) {
+		int increment = next_cap / 2;
+		if (increment < 1)
+			increment = 1;
+		if (next_cap > INT_MAX - increment)
+			return required;
+		next_cap += increment;
+	}
+	return next_cap;
+}
 
 __host__ __device__ __inline__ static cuFloatComplex cuCsqrtf(cuFloatComplex x) {
 	cuFloatComplex out;
@@ -473,19 +487,20 @@ static int solve_batch_p3p_ap3p_gpu_impl(
 		CUDA_UPDATE_SYMBOL_IF_CHANGED(h_K[5], cache_symbols[3], _cy);
 	}
 	if (N_poses > poses_cap) {
+		const int new_poses_cap = grow_cache_capacity(poses_cap, N_poses);
 		if (d_rvecs_cache) cudaFree(d_rvecs_cache);
 		if (d_tvecs_cache) cudaFree(d_tvecs_cache);
 		if (d_rand_states_cache) cudaFree(d_rand_states_cache);
 		if (d_pose_flags_cache) cudaFree(d_pose_flags_cache);
 		if (d_pose_prefix_cache) cudaFree(d_pose_prefix_cache);
 		if (d_pose_compact_cache) cudaFree(d_pose_compact_cache);
-		cudaMalloc((void**)&d_rvecs_cache, N_poses * 3 * sizeof(float));
-		cudaMalloc((void**)&d_tvecs_cache, N_poses * 3 * sizeof(float));
-		cudaMalloc((void**)&d_rand_states_cache, N_poses * sizeof(curandState));
-		cudaMalloc((void**)&d_pose_flags_cache, N_poses * sizeof(int));
-		cudaMalloc((void**)&d_pose_prefix_cache, N_poses * sizeof(int));
-		cudaMalloc((void**)&d_pose_compact_cache, N_poses * 6 * sizeof(float));
-		poses_cap = N_poses;
+		cudaMalloc((void**)&d_rvecs_cache, new_poses_cap * 3 * sizeof(float));
+		cudaMalloc((void**)&d_tvecs_cache, new_poses_cap * 3 * sizeof(float));
+		cudaMalloc((void**)&d_rand_states_cache, new_poses_cap * sizeof(curandState));
+		cudaMalloc((void**)&d_pose_flags_cache, new_poses_cap * sizeof(int));
+		cudaMalloc((void**)&d_pose_prefix_cache, new_poses_cap * sizeof(int));
+		cudaMalloc((void**)&d_pose_compact_cache, new_poses_cap * 6 * sizeof(float));
+		poses_cap = new_poses_cap;
 	}
 	gpuErrchk;
 
@@ -508,11 +523,12 @@ static int solve_batch_p3p_ap3p_gpu_impl(
 
 int solve_batch_p3p_ap3p_gpu(float* h_p3s, float* h_p2s, float* h_o_rvecs, float* h_o_tvecs, float* h_K, int N_pts, int N_poses) {
 	if (N_pts > pts_cap) {
+		const int new_pts_cap = grow_cache_capacity(pts_cap, N_pts);
 		if (d_p2s_cache) cudaFree(d_p2s_cache);
 		if (d_p3s_cache) cudaFree(d_p3s_cache);
-		cudaMalloc((void**)&d_p2s_cache, N_pts * 2 * sizeof(float));
-		cudaMalloc((void**)&d_p3s_cache, N_pts * 3 * sizeof(float));
-		pts_cap = N_pts;
+		cudaMalloc((void**)&d_p2s_cache, new_pts_cap * 2 * sizeof(float));
+		cudaMalloc((void**)&d_p3s_cache, new_pts_cap * 3 * sizeof(float));
+		pts_cap = new_pts_cap;
 	}
 	cudaMemcpy(d_p2s_cache, h_p2s, N_pts * 2 * sizeof(float), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_p3s_cache, h_p3s, N_pts * 3 * sizeof(float), cudaMemcpyHostToDevice);
